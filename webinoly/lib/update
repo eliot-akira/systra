@@ -1,0 +1,144 @@
+#!/bin/bash
+
+echo "${red}"
+echo "Your server configuration will be updated and all changes you manually did will be lost!!"
+echo "${blu}Current server version 'v$oldver' will be upgraded to the newest 'v$newver'. Wait...${end}"
+
+
+# v1.5.0
+onezero_to_oneone() {
+	
+	if [[ $(conf_read mysql-tool) == "true" ]]; then
+		# Remove old phpMyAdmin
+		echo "phpmyadmin      phpmyadmin/dbconfig-remove      boolean true" | debconf-set-selections
+		echo "phpmyadmin      phpmyadmin/purge        boolean true" | debconf-set-selections
+		sudo apt-get -y purge phpmyadmin
+		sudo apt-get -y autoremove
+		sudo rm -rf /var/www/$(conf_read tools-port)/htdocs/pma
+		conf_write mysql-tool purged
+		
+		# Install new phpMyAdmin
+		sudo stack -pma
+	fi
+	
+	if [[ $(conf_read nginx-tool) == "true" ]]; then
+		# Install LetsEncrypt
+		echo | sudo add-apt-repository ppa:certbot/certbot
+		pre_install
+		sudo apt-get -y install certbot
+		
+		cronrene=$( sudo grep -F "letsencrypt renew" /var/spool/cron/crontabs/root )
+		[[ -n $cronrene ]] && sudo sed -i '/letsencrypt renew/c\15 3 * * 7 certbot renew --post-hook "service nginx restart"' /var/spool/cron/crontabs/root
+		
+		sudo echo "
+staple-ocsp = True
+must-staple = True" | tee -a /etc/letsencrypt/cli.ini
+
+		for site in "/etc/nginx/sites-available"/*
+		do
+			domi=$(echo $site | cut -f 5 -d "/")
+			[[ $domi != "html" && $domi != $(conf_read tools-port) && $domi != *".dpkg-"* ]] && sudo sed -i "/#include \/var\/www\//c\	include /var/www/$domi/*-nginx.conf;" /etc/nginx/sites-available/$domi
+		done
+	fi
+	
+}
+
+
+# v1.6.0
+oneone_to_onetwo() {
+	# Forgot doing it in 1.1 update
+	sudo apt-get -y install zip
+}
+
+
+# v1.7.0
+onetwo_to_onethree() {
+	# Nginx "ssl on" directive is now deprecated - remove it!
+	for site in "/etc/nginx/sites-available"/*
+	do
+		domi=$(echo $site | cut -f 5 -d "/")
+		[[ $domi != "html" && $domi != 22222 ]] && sudo sed -i "/ssl on;/c\	#ssl on;" /etc/nginx/sites-available/$domi
+	done
+	
+	# swappines is now included by default in linux optimization.
+	sudo sed -i '/vm.swappiness/d' /etc/sysctl.conf
+
+	# Now we need a backup of default Nginx file for "default-site" command.
+	[[ -a /etc/nginx/sites-available/default ]] && sudo cp -p /etc/nginx/sites-available/default /opt/webinoly/templates/source/
+}
+
+
+# v1.9.0
+onethree_to_onefour() {
+	sudo rm /opt/webinoly/templates/nginx/conf.d/blockips.conf
+	if [[ $(conf_read nginx) == "true" ]]; then
+		sudo mkdir -p /etc/nginx/apps.d
+		sudo cp /etc/nginx/common/acl.conf /opt/webinoly/templates/source/acl.conf.old
+		grep "^allow [^127.0.0.1]" /opt/webinoly/templates/source/acl.conf.old > /etc/nginx/apps.d/whitelist-acl.conf
+		[[ -f /etc/nginx/apps.d/whitelist-acl.conf && ! -s /etc/nginx/apps.d/whitelist-acl.conf ]] && sudo rm /etc/nginx/apps.d/whitelist-acl.conf
+		[[ -f /etc/nginx/sites-available/$(conf_read tools-port) ]] && sudo sed -i "/acl.conf;/i \	include common\/auth.conf;" /etc/nginx/sites-available/$(conf_read tools-port)
+		
+		for site in "/etc/nginx/sites-available"/*
+		do
+			domi=$(echo $site | cut -f 5 -d "/")
+			if [[ $domi != "html" && $domi != $(conf_read tools-port) ]]; then
+				if [[ $(is_proxy $domi) == "true" ]]; then
+					pat="\t}"
+				elif [[ $(is_wp $domi) == "true" || $(is_php $domi) == "true" ]]; then
+					pat="index"
+				else
+					pat="\tlocation \/ { try"
+				fi
+				sudo sed -i "/$pat/a \	# WebinolyCustomEnd" /etc/nginx/sites-available/$domi
+				sudo sed -i "/$pat/a \	# WebinolyCustom" /etc/nginx/sites-available/$domi
+				sudo sed -i "/$pat/a \	" /etc/nginx/sites-available/$domi
+				sudo sed -i "/$pat/a \	include common\/auth.conf;" /etc/nginx/sites-available/$domi
+				sudo sed -i "/$pat/a \	" /etc/nginx/sites-available/$domi
+				
+				if [[ $(is_wp $domi) == "true" ]]; then
+					[[ $(conf_read wp-admin-auth) == "purged" ]] && sudo httpauth $domi -wp-admin=off
+					[[ $(conf_read yoast-sitemap) == "true" ]] && sudo site $domi -yoast-sitemap=on
+				fi
+			fi
+		done
+	fi
+}
+
+
+# v1.12.0
+onefour_to_onefive() {
+	sudo sed -i '/ HTTP_PROXY /d' /etc/nginx/fastcgi_params
+	sudo sed -i '/ SCRIPT_FILENAME /d' /etc/nginx/fastcgi_params
+	sudo rm -rf /etc/php/$(conf_read php-ver)/fpm/pool.d/debug.conf
+	sudo rm -rf /var/log/php$(conf_read php-ver)-slog.log
+	
+	sudo touch /var/www/$(conf_read tools-port)/htdocs/ping
+	sudo touch /var/www/$(conf_read tools-port)/htdocs/status
+	sudo touch /var/www/$(conf_read tools-port)/htdocs/nginx_status
+	sudo rm -rf /var/www/$(conf_read tools-port)/htdocs/fpm
+	
+	if [[ $(conf_read nginx-ppa) == "mainline" ]]; then
+		echo | sudo add-apt-repository --remove 'ppa:nginx/development'
+		echo | sudo add-apt-repository ppa:ondrej/nginx-mainline
+	else
+		echo | sudo add-apt-repository --remove 'ppa:nginx/stable'
+		echo | sudo add-apt-repository ppa:ondrej/nginx
+	fi
+}
+
+
+# Version numbers without point
+[[ ${oldver//.} -lt 11 ]] && onezero_to_oneone > /dev/null 2>&1 &
+wait $!
+[[ ${oldver//.} -lt 12 ]] && oneone_to_onetwo > /dev/null 2>&1 &
+wait $!
+[[ ${oldver//.} -lt 13 ]] && onetwo_to_onethree > /dev/null 2>&1 &
+wait $!
+[[ ${oldver//.} -lt 14 ]] && onethree_to_onefour > /dev/null 2>&1 &
+wait $!
+[[ ${oldver//.} -lt 15 ]] && onefour_to_onefive > /dev/null 2>&1 &
+wait $!
+
+
+sudo webinoly -server-reset
+echo "${gre}Your server-configuration has been successfully updated!${end}"

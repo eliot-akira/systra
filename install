@@ -1,0 +1,148 @@
+#!/bin/bash
+
+# Get absolute path this script is in, for example: /home/$USER/bin
+SCRIPTPATH=$(dirname $(readlink -f "$0"))
+
+echo -e "Installing system\n"
+
+if [ ! -f ~/.bash_aliases ]; then
+
+  echo -e "Set up shell environment\n"
+
+  cp $SCRIPTPATH/assets/.profile ~
+  cp $SCRIPTPATH/assets/.bash_aliases ~
+
+  mkdir -p ~/apps
+  mkdir -p ~/bin
+  mv $SCRIPTPATH ~/bin/systra
+  ln -s ~/bin/systra/sys ~/bin/sys
+
+  echo "Run: source ~/.profile"
+  echo "Then run: sys install"
+  exit
+fi
+
+if [ ! -d ~/n ]; then
+
+  echo -e "Install Node.js - JavaScript runtime\n"
+
+  sudo apt-get update
+  sudo apt-get install build-essential
+  curl -L https://git.io/n-install | bash
+
+  echo "Run: source ~/.profile"
+  echo "Then run: sys install"
+  exit
+fi
+
+if [ ! -f ~/n/bin/yarn ]; then
+
+  echo -e "Install Yarn - Package manager for Node.js\n"
+
+  npm install --global yarn
+fi
+
+if [ ! -f ~/.yarn/bin/pm2 ]; then
+
+  echo -e "Install PM2 - Process manager for Node.js\n"
+
+  yarn global add pm2
+
+  # https://pm2.keymetrics.io/docs/usage/startup/
+  pm2 startup
+
+  echo -e "\nRun the above command, then run: sys install\n"
+
+  # Copy crontab template, replace placeholders, load cron
+
+  cp $SCRIPTPATH/assets/crontab-template.txt ~/crontab-tmp.txt && sudo sed -i "s/__USER__/$USER/g" ~/crontab-tmp.txt && crontab ~/crontab-tmp.txt && rm ~/crontab-tmp.txt
+
+  # When upgrading Node.js, run:
+  # pm2 unstartup && pm2 startup
+
+  exit
+fi
+
+if [ ! -d /opt/webinoly ]; then
+
+  echo -e "Install web server - Nginx, MariaDB/MySQL, PHP\n"
+
+  # wget -qO weby qrok.es/wy && sudo bash weby 0
+
+  ### Below based on weby script --->
+
+  sudo mkdir -p /opt/webinoly
+
+  # sudo tar -xf $HOME/webinoly.tar -C /opt/webinoly
+
+  sudo cp -r $SCRIPTPATH/webinoly/lib /opt/webinoly
+  sudo cp -r $SCRIPTPATH/webinoly/plugins /opt/webinoly
+  sudo cp -r $SCRIPTPATH/webinoly/templates /opt/webinoly
+
+  sudo mkdir -p /opt/webinoly/templates/source
+  sudo find /opt/webinoly -type d -exec chmod 755 {} \;
+  sudo find /opt/webinoly -type f -exec chmod 644 {} \;
+  sudo chmod -f 744 /opt/webinoly/lib/ex-*
+
+  sudo chmod 755 /opt/webinoly/plugins/*
+  sudo mv /opt/webinoly/plugins/* /usr/bin/
+
+  sudo -s source /opt/webinoly/lib/general
+
+  ### <---
+
+  sudo webinoly -conf-value_max-mb-uploads=200
+  sudo webinoly -conf-value_nginx-ppa=mainline
+  sudo stack -lemp
+
+  # Allow SFTP access to www-data user
+  # sudo webinoly -login-www-data=on
+
+  # Allow default user to edit served files
+
+  sudo usermod -a -G www-data $USER
+  sudo chown www-data:www-data -R /var/www
+  sudo chgrp -R www-data /var/www/*
+  sudo chmod -R g+rw /var/www
+
+  # All new files and directories created under /var/www are owned by the www-data group.
+  sudo find /var/www -type d -exec chmod 2775 {} \;
+  sudo find /var/www -type f -exec chmod ug+rw {} \;
+
+  # Timezone is set automatically to local machine
+
+  # List of timezones: https://www.php.net/manual/en/timezones.php
+  # ..Or run: ls /usr/share/zoneinfo
+  # sudo webinoly -timezone=Europe/Prague
+
+  # Increase file watch limit - Helps with remote editing large folders
+  # https://code.visualstudio.com/docs/setup/linux#_visual-studio-code-is-unable-to-watch-for-file-changes-in-this-large-workspace-error-enospc
+  sudo -u root bash -c 'echo -e "\nfs.inotify.max_user_watches=524288\n" >> /etc/sysctl.conf'
+  sudo sysctl -p &> /dev/null
+
+  echo "Make note of the above credentials, then run: sys install"
+
+  exit
+fi
+
+if [ ! -f ~/bin/composer ]; then
+
+  echo -e "Install Composer - Package manager for PHP\n"
+
+  curl https://getcomposer.org/installer -o install-composer.php
+  php install-composer.php
+  rm install-composer.php
+  mv composer.phar ~/bin/composer
+fi
+
+if [ ! -f ~/bin/wp ]; then
+
+  echo -e "Install WP-CLI - Command line interface for WordPress\n"
+
+  curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+  php wp-cli.phar --info
+  chmod +x wp-cli.phar
+  mv wp-cli.phar ~/bin/wp
+fi
+
+echo "System installed."

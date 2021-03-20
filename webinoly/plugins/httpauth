@@ -1,0 +1,365 @@
+#!/bin/bash
+
+# Http-Authentication Plugin
+# Syntax: httpauth <option> <argument>
+# Options: -add, -delete, -list, -wp-admin, -whitelist, -path
+# Arguments: -raw, -list, -exact
+
+source /opt/webinoly/lib/general
+check_for_parameters $@
+api-events_update has
+
+[[ -n $wp_admin && -z $domain ]] || check_for_nginx -ask
+
+# Check for domain.
+if [[ -n $domain && -f /etc/nginx/sites-available/$domain ]]; then
+	authfile="apps.d/.htpasswd-$domain"
+elif [[ -n $domain && ! -f /etc/nginx/sites-available/$domain ]]; then
+	echo "${red}[ERROR] Domain not found!${end}"
+	exit 1
+else
+	authfile=".htpasswd"
+fi
+# Check for valid WP subfolder
+[[ -z $subfolder ]] && subfolder=""
+if [[ -n $subfolder && ! ( $subfolder =~ ^\/([A-Za-z0-9_\/\-]+)?[^\/]$ ) ]]; then
+	echo "${red}[ERROR] Please, enter a valid value for subfolder!${end}"
+	exit 1
+elif [[ -n $subfolder && ( -n $domain || -n $wp_admin || -n $path ) && $(is_subfolder $domain $subfolder) == "false" ]]; then
+	echo "${red}[ERROR] Subfolder not found!${end}"
+	exit 1
+else
+	subname=$(echo $subfolder | sed "s/\//_/g")
+fi
+
+
+if [[ -n $add ]]; then
+	api-events_update ha1
+	if [[ $add == true ]]; then
+		echo ""
+		read -p "${blu}HTTP-Auth User: ${end}" user
+		read -p "${blu}HTTP-Auth Password: ${end}" pass
+		echo ""
+	elif [[ $(echo "${add}" | cut -c-1) == "[" && $(echo "${add}" | rev | cut -c-1) == "]" ]]; then
+		# No need for check var lenght to prevent errors, the previous condition is enough in this case.
+		userdata=${add:1:-1}
+		user=$(echo "${userdata}" | cut -d',' -f 1 -s)
+		pass=$(echo "${userdata}" | cut -d',' -f 2 -s)
+	else
+		user=""
+	fi
+	
+	if ! [[ -n $user && -n $pass && $user =~ ^[^:]+$ && $pass =~ ^[^:]+$ ]]; then
+		echo "${red}[ERROR] Please, enter a valid username and password!${end}"
+		exit 1
+	fi
+	
+	# Create pass-file if not-exist.
+	if [[ ! -f /etc/nginx/$authfile ]]; then
+		sudo touch /etc/nginx/$authfile
+		sudo chmod 644 /etc/nginx/$authfile
+		sudo chown -R root:root /etc/nginx/$authfile
+		[[ -n $domain && $subdomain == "false" ]] && sudo ln -s /etc/nginx/$authfile /etc/nginx/apps.d/.htpasswd-www.$domain
+	fi
+	
+	exist=$( grep -E "^${user}:" /etc/nginx/$authfile )
+	if [[ -z $exist ]]; then
+		echo "$user:$(openssl passwd -1 $pass)" >> /etc/nginx/$authfile
+		echo "${gre}User '$user' has been added successfully!${end}"
+	else
+		echo "${red}[ERROR] Can not create '$user' user because already exist!${end}"
+		exit 1
+	fi
+	echo ""
+
+	
+elif [[ -n $delete ]]; then
+	api-events_update ha2
+	[[ $delete == true ]] && read -p "${blu}HTTP-Auth User: ${end}" userpurge || userpurge=$delete
+	[[ -f /etc/nginx/$authfile ]] && exist=$( grep -F "${userpurge}:" /etc/nginx/$authfile )
+	if [[ -z $userpurge ]]; then
+		echo "${red}[ERROR] Please, enter a valid username!${end}"
+		exit 1
+	elif [[ -z $exist ]]; then
+		echo "${red}[ERROR] User '$userpurge' does not exist!${end}"
+		exit 1
+	fi
+	sudo sed -i "/^$userpurge:/d" /etc/nginx/$authfile
+	
+	# Remove site-auth-file if empty.
+	if [[ -n $domain && -f /etc/nginx/$authfile && ! -s /etc/nginx/$authfile ]]; then
+		sudo rm /etc/nginx/$authfile
+		sudo rm -rf /etc/nginx/apps.d/.htpasswd-www.$domain
+	fi
+	
+	echo "${gre}User '$userpurge' has been deleted successfully!${end}"
+
+	
+elif [[ -n $wp_admin ]]; then
+	api-events_update ha3
+	if [[ -n $domain ]]; then
+		if [[ $(is_wp $domain $subfolder) == "false" ]]; then
+			echo "${red}[ERROR] Site${blu} $domain$subfolder ${red}is not a WP site!${end}"
+			exit 1
+		fi
+	fi
+	
+	if [[ $wp_admin == "on" && -n $domain ]]; then
+		if [[ $(is_wp_auth $domain $subfolder) != "true" ]]; then
+			if [[ -z $subfolder ]]; then
+				sudo sed -i '/wpcommon-noauth.conf/c \	include common/wpcommon.conf;' /etc/nginx/sites-available/$domain
+			else
+				sudo sed -i "/wpcommon-noauth.conf/c \include apps.d/$domain$subname-wpcommon.conf;" /etc/nginx/apps.d/$domain$subname-wpfc.conf
+				sudo sed -i "/wpcommon-noauth.conf/c \include apps.d/$domain$subname-wpcommon.conf;" /etc/nginx/apps.d/$domain$subname-php.conf
+			fi
+			echo "${gre}WordPress Admin HTTP Authentication for${blu} $domain$subfolder ${gre}has been enabled! ${end}"
+		else
+			echo "${gre}WordPress Admin HTTP Authentication for${blu} $domain$subfolder ${gre}is already enabled! ${end}"
+			nginx_not="true" # Nginx-Reload not-needed.
+		fi
+	
+	elif [[ $wp_admin == "off" && -n $domain ]]; then
+		if [[ $(is_wp_auth $domain $subfolder) == "true" ]]; then
+			if [[ -z $subfolder ]]; then
+				sudo sed -i '/wpcommon.conf/c \	include common/wpcommon-noauth.conf;' /etc/nginx/sites-available/$domain
+			else
+				sudo sed -i "/wpcommon.conf/c \include apps.d/$domain$subname-wpcommon-noauth.conf;" /etc/nginx/apps.d/$domain$subname-wpfc.conf
+				sudo sed -i "/wpcommon.conf/c \include apps.d/$domain$subname-wpcommon-noauth.conf;" /etc/nginx/apps.d/$domain$subname-php.conf
+			fi
+			echo "${gre}WordPress Admin HTTP Authentication for${blu} $domain$subfolder ${gre}has been disabled! ${end}"
+		else
+			echo "${gre}WordPress Admin HTTP Authentication for${blu} $domain$subfolder ${gre}is already disabled! ${end}"
+			nginx_not="true" # Nginx-Reload not-needed.
+		fi
+	elif [[ $wp_admin == "on" ]]; then
+		conf_write wp-admin-auth true
+		echo "${gre}WordPress Admin HTTP Authentication has been enabled! (global)${end}"
+		nginx_not="true" # Nginx-Reload not-needed.
+	elif [[ $wp_admin == "off" ]]; then
+		conf_write wp-admin-auth purged
+		echo "${gre}WordPress Admin HTTP Authentication has been disabled! (global)${end}"
+		nginx_not="true" # Nginx-Reload not-needed.
+	else
+		echo "${red}[ERROR] Invalid value for wp-admin! ${end}"
+		exit 1
+	fi
+
+
+elif [[ -n $whitelist ]]; then
+	api-events_update ha4
+	if [[ -z $purge ]]; then
+		if [[ -n $list ]]; then
+			[[ $list == "raw" || -n $raw ]] && echo "" || echo "${blu}"
+			if [[ -f /etc/nginx/apps.d/whitelist-acl.conf && -z $raw ]]; then
+				sudo sed -n 's/^allow //p;' /etc/nginx/apps.d/whitelist-acl.conf | sudo sed -n 's/;$//p' | sed 's/^/+ /'
+			elif [[ -f /etc/nginx/apps.d/whitelist-acl.conf && -n $raw ]]; then
+				sudo sed -n 's/^allow //p;' /etc/nginx/apps.d/whitelist-acl.conf | sudo sed -n 's/;$//p'
+			else
+				[[ $list != "raw" && -z $raw ]] && echo "[Empty] No IP's were found!"
+			fi
+			[[ $list == "raw" || -n $raw ]] && echo "" || echo "${end}"
+		else
+			[[ $whitelist == true ]] && read -p "${blu}IP address to whitelist: ${end}" whitelist
+			if [[ $(is_ip $whitelist) == "true" ]]; then
+				if [[ ! -f /etc/nginx/apps.d/whitelist-acl.conf ]]; then
+					sudo touch /etc/nginx/apps.d/whitelist-acl.conf
+					sudo chmod 644 /etc/nginx/apps.d/whitelist-acl.conf
+					sudo chown -R root:root /etc/nginx/apps.d/whitelist-acl.conf
+				fi
+				
+				exist=$( grep -E "^allow $whitelist;$" /etc/nginx/apps.d/whitelist-acl.conf )
+				if [[ -z $exist ]]; then
+					echo "allow ${whitelist};" >> /etc/nginx/apps.d/whitelist-acl.conf
+					echo "${gre}The IP address ${blu}'$whitelist'${gre} was successfully whitelisted!${end}"
+				else
+					echo "${gre}IP '$whitelist' is already whitelisted!${end}"
+					nginx_not="true" # Nginx-Reload not-needed.
+				fi
+			else	
+				echo "${red}[ERROR] Please, enter a valid IP value!${end}"
+				exit 1
+			fi
+		fi
+	else
+		[[ $whitelist == true ]] && read -p "${blu}IP address to remove from whitelist: ${end}" whitelist
+		if [[ $(is_ip $whitelist) == "true" ]]; then
+			# https://stackoverflow.com/questions/1797906/delete-using-a-different-delimiter-with-sed
+			[[ -f /etc/nginx/apps.d/whitelist-acl.conf ]] && sudo sed -i "\#^allow ${whitelist};#d" /etc/nginx/apps.d/whitelist-acl.conf
+			
+			# Remove site-auth-file if empty.
+			[[ -f /etc/nginx/apps.d/whitelist-acl.conf && ! -s /etc/nginx/apps.d/whitelist-acl.conf ]] && sudo rm /etc/nginx/apps.d/whitelist-acl.conf
+			
+			echo "${gre}The IP address ${blu}'$whitelist'${gre} was successfully removed from whitelist!${end}"
+		else
+			echo "${red}[ERROR] Please, enter a valid IP value!${end}"
+			exit 1
+		fi
+	fi
+
+
+elif [[ -n $path && -n $domain ]]; then
+	if [[ -z $purge ]]; then
+		if [[ $(is_forward $domain) == "true" ]]; then
+			echo "${red}[ERROR] Forwarded domains are not allowed!${end}"
+			exit 1
+		fi
+		
+		[[ $path == true ]] && read -p "${blu}Path to protect: ${end}" path
+		
+		# Check for reserved paths.
+		if [[ ( -z $exact && $path =~ ^(/wp-admin|/wp-content/uploads/)$ ) || ( -n $exact && $path =~ ^(/favicon.ico|/robots.txt|/wp-login.php|/wp-config.txt)$ ) ]]; then
+			echo "${red}[ERROR] Reserved path!${end}"
+			exit 1
+		fi
+		
+		# Check if path is in a configured nginx subfolder
+		if [[ -z $subfolder && -n $(echo $path | cut -d'/' -f 2 -s) ]]; then
+			x="1"
+			while [[ -n $(echo $path | rev | cut -d'/' -f ${x}- -s | rev) ]]
+			do
+				if ! [[ $(is_subfolder $domain $(echo $path | rev | cut -d'/' -f ${x}- -s | rev)) =~ ^(true|false)$ ]]; then
+					echo "${red}[ERROR] Subfolder parameter not found!${end}"
+					exit 1
+				fi
+				x=$(($x+1))
+			done
+		fi
+		
+		
+		if [[ $path == "/" ]]; then
+			exist=$( grep -F "acl.conf;" /etc/nginx/sites-available/$domain )
+			if [[ -z $exist ]]; then
+				sudo sed -i "/# WebinolyCustom$/a \	include common/acl.conf;" /etc/nginx/sites-available/$domain
+				echo "${gre}This path ${blu}'$path'${gre} was successfully protected!${end}"
+			else
+				echo "${gre}Path: ${blu}'$path'${gre} is already protected!${end}"
+				nginx_not="true" # Nginx-Reload not-needed.
+			fi
+		elif [[ $path =~ ^\/([A-Za-z0-9_\/\.\-]+)?$ ]]; then
+			if [[ ! -f /etc/nginx/apps.d/$domain-nginx.conf ]]; then
+				sudo touch /etc/nginx/apps.d/$domain-nginx.conf
+				sudo chmod 644 /etc/nginx/apps.d/$domain-nginx.conf
+				sudo chown -R root:root /etc/nginx/apps.d/$domain-nginx.conf
+			fi
+			
+			if [[ -n $( grep -E "^# RedirectFrom: ${path}( \([RegxEact]+\))?$" /etc/nginx/apps.d/$domain-nginx.conf ) ]]; then
+				echo "${red}[ERROR] A redirection was found for this path, you better should protect the final destination!${end}"
+				exit 1
+			fi
+			
+			exist=$( grep -E "^# Path: ${path}$" /etc/nginx/apps.d/$domain-nginx.conf )
+			extac=$( grep -E "^# Path: ${path} \(Exact\)$" /etc/nginx/apps.d/$domain-nginx.conf )
+			if [[ ( -z $exist && -z $exact ) || ( -z $extac && -n $exact ) ]]; then
+				if [[ $exact == true ]]; then
+					sign="= "
+					firm="$path (Exact)"
+				else
+					sign=""
+					firm="$path"
+				fi
+				
+				echo "# Path: ${firm}
+location $sign$path {
+	include common/acl.conf;
+	try_files \$uri \$uri/ $subfolder/index.php\$is_args\$args;
+}
+# PathEnd" >> /etc/nginx/apps.d/$domain-nginx.conf
+				
+				if [[ $(is_php $domain $subfolder) == "false" && $(is_wp $domain $subfolder) == "false" ]]; then
+					sudo sed -i "/^# Path: $(echo $path | sed "s#/#\\\/#g")/,/^# PathEnd/{/try_files/d}" /etc/nginx/apps.d/$domain-nginx.conf
+				fi
+				
+				vconf=$( grep -E "include apps.d/$domain-nginx.conf;" /etc/nginx/sites-available/$domain )
+				[[ -z $vconf ]] && sudo sed -i "/# WebinolyCustom$/a \	include apps.d/$domain-nginx.conf;" /etc/nginx/sites-available/$domain
+				
+				# Last verification
+				if ! sudo nginx -t > /dev/null 2>&1; then
+					sudo httpauth $domain -path=$path -purge > /dev/null 2>&1
+					echo "${red}[ERROR] Seems like you are using some invalid Nginx values or characters!${end}"
+					exit 1
+				fi
+				
+				echo "${gre}This path ${blu}'$path'${gre} was successfully protected!${end}"
+			else
+				echo "${gre}Path: ${blu}'$path'${gre} is already protected!${end}"
+				nginx_not="true" # Nginx-Reload not-needed.
+			fi
+		else	
+			echo "${red}[ERROR] Please, enter a valid URL path!${end}"
+			exit 1
+		fi
+	else
+		# Purge HttpAuth Path
+		[[ $path == true ]] && read -p "${blu}Path to remove protection: ${end}" path
+		if [[ $path == "/" ]]; then
+			sudo sed -i "/acl.conf;/d" /etc/nginx/sites-available/$domain
+			echo "${gre}HTTP Authentication successfully removed from ${blu}'$path'${gre}!${end}"
+		elif [[ $path == "all" ]]; then
+			sudo sed -i "/acl.conf;/d" /etc/nginx/sites-available/$domain
+			sudo sed -i "/$domain-nginx.conf;/d" /etc/nginx/sites-available/$domain
+			sudo rm -rf /etc/nginx/apps.d/$domain-nginx.conf
+			echo "${gre}HTTP Authentication successfully removed from all your custom paths!${gre}${end}"
+		elif [[ $path =~ ^\/([A-Za-z0-9_\/\.\-]+)?$ ]]; then
+			if [[ -f /etc/nginx/apps.d/$domain-nginx.conf ]]; then
+				sudo sed -i "/^# Path: $(echo $path | sed "s#/#\\\/#g")/,/^# PathEnd/{/.*/d}" /etc/nginx/apps.d/$domain-nginx.conf
+				if [[ ! -s /etc/nginx/apps.d/$domain-nginx.conf ]]; then
+					sudo rm /etc/nginx/apps.d/$domain-nginx.conf
+					sudo sed -i "/$domain-nginx.conf;/d" /etc/nginx/sites-available/$domain
+				fi
+			fi
+			echo "${gre}HTTP Authentication successfully removed from ${blu}'$path'${gre}!${end}"
+		else
+			echo "${red}[ERROR] Please, enter a valid URL path!${end}"
+			exit 1
+		fi
+	fi
+
+elif [[ $list == "protected" ]]; then
+	if [[ -z $domain ]]; then
+		echo "${red}[ERROR] Please, enter a valid domain name!${end}"
+		exit 1
+	fi
+	
+	root=$( grep -F "acl.conf;" /etc/nginx/sites-available/$domain )
+	if [[ -n $root ]]; then
+		echo ""
+		[[ -z $raw ]] && echo "${blu}+ /" || echo "/"
+	elif [[ -z $root ]]; then
+		[[ -z $raw ]] && echo "${blu}" || echo ""
+	fi
+	if [[ -f /etc/nginx/apps.d/$domain-nginx.conf && -z $raw ]]; then
+		sudo sed -n 's/^# Path: //p;' /etc/nginx/apps.d/$domain-nginx.conf | sed 's/^/+ /'
+	elif [[ -f /etc/nginx/apps.d/$domain-nginx.conf && -n $raw ]]; then
+		sudo sed -n 's/^# Path: //p;' /etc/nginx/apps.d/$domain-nginx.conf
+	elif [[ -z $root ]]; then
+		[[ -z $raw ]] && echo "[Empty] No protected paths were found!"
+	fi
+	[[ -n $raw ]] && echo "" || echo "${end}"
+	nginx_not="true" # Nginx-Reload not-needed.
+	
+	
+elif [[ -n $list ]]; then
+	echo ""
+	if [[ -f /etc/nginx/$authfile ]]; then
+		cat /etc/nginx/$authfile | 
+		{
+		while read line
+		do
+			# Show only the user_name part, cut encrypted password string
+			[[ $list == "raw" || -n $raw ]] && echo "$line" | cut -f 1 -d ':' || echo "${gre}+ $(echo $line | cut -f 1 -d ':') ${end}"
+			nonemptylist=true
+		done
+		}
+	fi
+	[[ ! -s /etc/nginx/$authfile && -z $raw && $list != "raw" ]] && echo "${blu}[Empty] No users were found!${end}"
+	echo ""
+	nginx_not="true" # Nginx-Reload not-needed.
+
+
+else
+	echo "${red}[ERROR] Please enter a valid option!${end}"
+	exit 1
+fi
+
+[[ $(conf_read nginx) == "true" && -z $nginx_not ]] && sudo service nginx reload
+api-events_update hae

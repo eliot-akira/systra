@@ -1,0 +1,1634 @@
+#!/bin/bash
+
+# This is a library for Site Manager Plugin
+# Functions for site creation and delete
+source /opt/webinoly/lib/site-ssl
+
+
+warning_messages() {
+	# Warning Messages
+	if [[ $warning_mes != "true" ]]; then
+		if [[ $type == [123] && $(conf_read wp-admin-auth) != "purged" && ! -s /etc/nginx/.htpasswd && ! -s /etc/nginx/apps.d/.htpasswd-$domain ]]; then
+			echo "${dim}[WARNING] HTTP Authentication Credentials not found and you may need it to complete the WordPress installation process!!${end}"
+		fi
+		if [[ $(conf_read login-www-data) != "true" && (( -z $forward && -z $proxy && -z $parked && -z $mysql ) || ( -n $mysql && -n $domain )) ]]; then
+			echo "${dim}[WARNING] Login for www-data is not enabled and you may need it to upload your site files!${end}"
+		fi
+		warning_mes="true"
+	fi
+}
+
+wp_cache_plugins() {
+	api-events_update si3
+	
+	if [[ ! -d /var/www/$domain/htdocs$subfolder/wp-content/plugins/nginx-helper ]]; then
+		# Download Nginx Helper Plugin
+		sudo wget --timeout=15 -t 1 -qrO /var/www/$domain/htdocs/nginx-helper-plugin.zip https://downloads.wordpress.org/plugin/nginx-helper.latest-stable.zip
+		if [[ -s /var/www/$domain/htdocs/nginx-helper-plugin.zip ]]; then		
+			sudo unzip -qq /var/www/$domain/htdocs/nginx-helper-plugin.zip -d /var/www/$domain/htdocs$subfolder/wp-content/plugins/
+			sudo rm /var/www/$domain/htdocs/nginx-helper-plugin.zip
+			echo ""
+			echo "${gre} Nginx Helper Plugin has been installed!"
+			echo " Please, activate this plugin for a better experience with FastCgi Cache."
+			echo "${blu} ** IMPORTANT - Plugin Settings **"
+			echo "- The “Caching Method” should be set to “Nginx FastCgi Cache”."
+			echo "- Support for purge/url method is a premium feature only included in NGINX Plus (not-free) and we recommend not to trust in solutions or tools that use third-party NGINX modules to offer this feature."
+			echo "- The Purge Method should be set to “Delete local server cache file”."
+			echo "${end}"
+		else
+			echo "${red}[ERROR] Downloading Nginx-Helper plugin failed!${end}"
+		fi
+	else
+		echo "${gre}Nginx Helper Plugin is already installed!${end}"
+	fi
+
+	if [[ ! -d /var/www/$domain/htdocs$subfolder/wp-content/plugins/redis-cache ]]; then
+		# Download Redis Object Cache Plugin
+		sudo wget --timeout=15 -t 1 -qrO /var/www/$domain/htdocs/redis-cache-plugin.zip https://downloads.wordpress.org/plugin/redis-cache.latest-stable.zip
+		if [[ -s /var/www/$domain/htdocs/redis-cache-plugin.zip ]]; then		
+			sudo unzip -qq /var/www/$domain/htdocs/redis-cache-plugin.zip -d /var/www/$domain/htdocs$subfolder/wp-content/plugins/
+			sudo rm /var/www/$domain/htdocs/redis-cache-plugin.zip
+			echo ""
+			echo "${gre} Redis Object Cache Plugin has been installed!"
+			echo " Please, activate this plugin for a better experience with WordPress Object Cache."
+			echo "${blu} ** IMPORTANT - Plugin Settings **"
+			echo "- Go to “Menu > Settings > Redis” and be sure that Object Cache is enabled. "
+			echo "${end}"
+		else
+			echo "${red}[ERROR] Downloading Redis-Cache plugin failed!${end}"
+		fi
+	else
+		echo "${gre}Redis Object Cache Plugin is already installed!${end}"
+	fi
+	
+	sudo chown -R www-data:www-data /var/www/$domain/htdocs$subfolder/wp-content/plugins
+}
+
+
+dbword_check() {
+	local win="$1"
+	local RANDOM_NAME="Webinoly_$(pwgen -s -1)"
+	
+	# Reserved words - https://mariadb.com/kb/en/library/reserved-words/
+	# https://mariadb.com/kb/en/library/identifier-names/
+	
+	# Trim start/end spaces and quotes
+	win=$(echo ${win//\'})
+	win=$(echo ${win//\"} | xargs)
+	
+	# Check Lenght
+	[[ ( ${#win} -gt 80 && $2 == "user" ) || ( ${#win} -gt 64 && $2 != "user" ) ]] && win=$RANDOM_NAME
+	
+	# Reserved words
+	shopt -s nocasematch
+	if [[ $win =~ ^(ACCESSIBLE|ADD|ALL|ALTER|ANALYZE|AND|AS|ASC|ASENSITIVE|BEFORE|BETWEEN|BIGINT|BINARY|BLOB|BOTH|BY|CALL|CASCADE|CASE|CHANGE|CHAR|CHARACTER|CHECK|COLLATE|COLUMN|CONDITION|CONSTRAINT|CONTINUE|CONVERT|CREATE|CROSS|CURRENT_DATE|CURRENT_TIME|CURRENT_TIMESTAMP|CURRENT_USER|CURSOR|DATABASE|DATABASES|DAY_HOUR|DAY_MICROSECOND|DAY_MINUTE|DAY_SECOND|DEC|DECIMAL|DECLARE|DEFAULT|DELAYED|DELETE|DESC|DESCRIBE|DETERMINISTIC|DISTINCT|DISTINCTROW|DIV|DOUBLE|DROP|DUAL|EACH|ELSE|ELSEIF|ENCLOSED|ESCAPED|EXISTS|EXIT|EXPLAIN|FALSE|FETCH|FLOAT|FLOAT4|FLOAT8|FOR|FORCE|FOREIGN|FROM|FULLTEXT|GENERAL|GRANT|GROUP|HAVING|HIGH_PRIORITY|HOUR_MICROSECOND|HOUR_MINUTE|HOUR_SECOND|IF|IGNORE|IGNORE_SERVER_IDS|IN|INDEX|INFILE|INNER|INOUT|INSENSITIVE|INSERT|INT|INT1|INT2|INT3|INT4|INT8|INTEGER|INTERVAL|INTO|IS|ITERATE|JOIN|KEY|KEYS|KILL|LEADING|LEAVE|LEFT|LIKE|LIMIT|LINEAR|LINES|LOAD|LOCALTIME|LOCALTIMESTAMP|LOCK|LONG|LONGBLOB|LONGTEXT|LOOP|LOW_PRIORITY|MASTER_HEARTBEAT_PERIOD|MASTER_SSL_VERIFY_SERVER_CERT|MATCH|MAXVALUE|MEDIUMBLOB|MEDIUMINT|MEDIUMTEXT|MIDDLEINT|MINUTE_MICROSECOND|MINUTE_SECOND|MOD|MODIFIES|NATURAL|NOT|NO_WRITE_TO_BINLOG|NULL|NUMERIC|ON|OPTIMIZE|OPTION|OPTIONALLY|OR|ORDER|OUT|OUTER|OUTFILE|PARTITION|PRECISION|PRIMARY|PROCEDURE|PURGE|RANGE|READ|READS|READ_WRITE|REAL|RECURSIVE|REFERENCES|REGEXP|RELEASE|RENAME|REPEAT|REPLACE|REQUIRE|RESIGNAL|RESTRICT|RETURN|REVOKE|RIGHT|RLIKE|ROWS|SCHEMA|SCHEMAS|SECOND_MICROSECOND|SELECT|SENSITIVE|SEPARATOR|SET|SHOW|SIGNAL|SLOW|SMALLINT|SPATIAL|SPECIFIC|SQL|SQLEXCEPTION|SQLSTATE|SQLWARNING|SQL_BIG_RESULT|SQL_CALC_FOUND_ROWS|SQL_SMALL_RESULT|SSL|STARTING|STRAIGHT_JOIN|TABLE|TERMINATED|THEN|TINYBLOB|TINYINT|TINYTEXT|TO|TRAILING|TRIGGER|TRUE|UNDO|UNION|UNIQUE|UNLOCK|UNSIGNED|UPDATE|USAGE|USE|USING|UTC_DATE|UTC_TIME|UTC_TIMESTAMP|VALUES|VARBINARY|VARCHAR|VARCHARACTER|VARYING|WHEN|WHERE|WHILE|WINDOW|WITH|WRITE|XOR|YEAR_MONTH|ZEROFILL)$ ]]; then
+		win=$RANDOM_NAME
+	fi
+	shopt -u nocasematch
+	
+	# Only numerals 0-9, basic Latin letters, both lowercase and uppercase, dollar sign, underscore.
+	[[ $win =~ ^[0-9A-Za-z\$_]+$ ]] || win=$RANDOM_NAME
+	
+	# Can not contain only numbers
+	[[ $win =~ ^[0-9]+$ ]] && win=$RANDOM_NAME
+	
+	# Floating point number confusing
+	[[ ${win:0:1} =~ ^[0-9]+$ && ${win:1:1} == "e" ]] && win=$RANDOM_NAME
+	
+	echo $win
+}
+
+
+wpinstall() {
+	api-events_update si2
+	if [[ -z $domain && -n $mysql ]]; then
+		local dom="Webinoly_$(pwgen -s -1)"
+	elif [[ -n $subfolder ]]; then
+		local dom=$(echo "$domain$subfolder" | sed "s/[^0-9A-Za-z]/_/g")
+		sudo mkdir -p /var/www/$domain/htdocs$subfolder
+	else
+		local dom=$(echo $domain | sed "s/[^0-9A-Za-z]/_/g")
+	fi
+	
+	local AUTOGENPASS_WPDB=`pwgen -s -1 16`
+	local setupmysql="y"
+	local setupwp="y"
+	local dbhost="localhost"
+	local dbname=$dom
+	local dbuser=$dom
+	local dbpass=$AUTOGENPASS_WPDB
+	local dbpref="wp_"
+	
+	# WP Unattended
+	if [[ $type == [35] ]]; then
+		[[ $setmsqcustom == "false" ]] && setupmysql="n"
+		[[ $setpwpcustom == "false" ]] && setupwp="n"
+		
+		dbhost="$dbhostcustom"
+		dbname="$dbnamecustom"
+		dbuser="$dbusercustom"
+		dbpass="$dbpasscustom"
+		dbpref="$dbprefcustom"
+		dburoot="$exusercustom"
+		dbproot="$expasscustom"
+	fi
+	
+	echo "${blu}"
+	if [[ $type == 1 ]]; then
+		echo "Do you need to setup new MySQL database? [Y/n]"
+		while read -r -n 1 -s setupmysql; do
+			  setupmysql=${setupmysql:-y}
+			  [[ $setupmysql = [YyNn] ]] && break
+		done
+		echo "Create WP-Config file automatically? [Y/n]"
+		while read -r -n 1 -s setupwp; do
+			  setupwp=${setupwp:-y}
+			  [[ $setupwp = [YyNn] ]] && break
+		done
+	fi
+	
+	# Just create DB, not install WP
+	[[ $type == [045] ]] && setupwp="n"
+	
+	# Download WP (latest version)
+	if [[ $type == [123] ]]; then
+		echo "${dim}Downloading WordPress...${end}${blu}"
+		sudo wget --timeout=15 -t 1 -qrO /var/www/$domain/htdocs/wp.tar.gz https://wordpress.org/latest.tar.gz
+		if [[ ! -s /var/www/$domain/htdocs/wp.tar.gz ]]; then
+			echo "${red}[ERROR] Downloading WordPress failed!${end}"
+			exit 1
+		fi
+		
+		sudo tar -xf /var/www/$domain/htdocs/wp.tar.gz -C /var/www/$domain/
+		sudo mv /var/www/$domain/wordpress/* /var/www/$domain/htdocs$subfolder/
+		sudo rm -rf /var/www/$domain/wordpress
+		sudo rm /var/www/$domain/htdocs/wp.tar.gz
+	fi
+	
+	# Generate and auto-fill wp-config.php and also create database
+	if [[ $setupmysql == [yY] || $setupwp == [yY] ]]; then
+		local done="0"
+		
+		while [[ $done != "1" ]]
+		do
+			done="1"
+			# Ask DB data or suggest default values
+			echo ""
+			[[ $type == [2345] ]] || read -p "Database Host [localhost]: " dbhost
+			dbhost=${dbhost:-localhost}
+			[[ ${dbhost,,} == "localhost" && $setupmysql == [yY] ]] && check_for_mysql
+			
+			# Check if localhost or external DB
+			if [[ $dbhost != "localhost" && $setupmysql == [yY] ]]; then
+				# DB host validation
+				is_url $dbhost -split
+				if [[ -n $url_path ]]; then
+					echo "${red}[ERROR] Invalid database host/port! (Folders in DB host are not supported)${blu}"
+					url_path=""
+					done="0"
+					continue 1
+				elif [[ $(is_url $dbhost) =~ ^(http|https|true)$ ]]; then	
+					local dburl=$url_host
+					local dbport=$url_port
+				else
+					echo "${red}[ERROR] Invalid database host/port!${blu}"
+					done="0"
+					continue 1
+				fi
+				
+				# Default external DB port
+				if [[ -z $dbport && -n $dburl ]]; then
+					dbport="3306"
+					dbhost="${dbhost}:${dbport}"
+				fi
+				
+				check_for_mysql_client
+				echo "${blu}"
+				
+				if [[ $type == 1 || ($type == [35] && ( -z $dburoot || -z $dbproot )) ]]; then
+					read -p "External DB username: " dburoot
+					read -p "External DB password: " dbproot
+					echo ""
+				fi
+			fi
+			
+			# Check for MySQL Connection
+			if [[ ( $dbhost == "localhost" && $(check_mysql_connection localhost) != "true" ) || ( $dbhost != "localhost" && $(check_mysql_connection $dburl $dbport $dburoot $dbproot) != "true" ) ]]; then
+				# Reset variables
+				local dburl=""
+				local dbport=""
+				local dburoot=""
+				local dbproot=""
+				
+				# While loop
+				done="0"
+				echo "${blu}"
+				continue 1
+			fi
+			
+			# ************* Ask for DB Name and validate data *************** #
+			dom=$(dbword_check $dom)
+			[[ $type == [2345] ]] || read -p "Database Name [$dom]:" dbname
+			dbname=${dbname:-$dom}
+			
+			# Check for duplicate database names, if already exists ask for another dbname to create the new db
+			if [[ $setupmysql == [yY] ]]; then
+				local newdbname="$dbname"
+				while [[ $dbname == $newdbname && $dbreuse != [yY] ]]; do
+					if [[ $dbhost == "localhost" ]]; then
+						# https://stackoverflow.com/questions/7364709/bash-script-check-if-mysql-database-exists-perform-action-based-on-result
+						local newdbname=$(sudo mysqlshow --user=admin -p$ADMIN_PASS | grep -ow $dbname)
+					else
+						local newdbname=$(sudo mysqlshow -h "$dburl" -P "$dbport" -u"$dburoot" -p"$dbproot" | grep -ow $dbname)
+					fi
+					
+					if [[ $newdbname == $dbname || $dbname != $(dbword_check $dbname) ]]; then
+						echo ""
+						if [[ $newdbname == $dbname ]]; then
+							echo "${red}[ERROR] Database ${blu}$dbname ${red}already exists!${end}"
+							[[ $type == [35] ]] && exit 1 # Unattended sites should exit instead of asking
+							echo "${blu}Do you want to use this DB in your new site? [y/N]"
+							while read -r -n 1 -s dbreuse; do
+							  local dbreuse=${dbreuse:-n}
+							  [[ $dbreuse == [YyNn] ]] && break
+							done
+						fi
+						if [[ $dbname != $(dbword_check $dbname) ]]; then
+							if [[ $type == [24] ]]; then
+								newdbname="Webinoly_$(pwgen -s -1)"
+								dbname="$newdbname"
+								continue 1
+							fi
+							echo "${red}[ERROR] The DB Name can not be a reserved word or should only contain allowed characters!${blu}"
+							dbreuse="n"
+						fi
+						
+						if [[ $dbreuse != [yY] ]]; then
+							echo ""
+							read -p "Please enter a new DB_NAME for your Database: " newdbname
+							[[ -z "$newdbname" ]] && newdbname="$dbname"
+							dbname="$newdbname"
+						elif [[ $dbreuse == [yY] ]]; then
+							# If you want to use the DB that already exist, abort DB creation.
+							setupmysql="n"
+						fi
+					fi
+				done
+			fi
+			
+			# ************* Ask for DB User and validate data *************** #
+			[[ $type == [2345] ]] || read -p "Database User [$dom]:" dbuser
+			dbuser=${dbuser:-$dom}
+			
+			# Check for duplicate database users, if already exists ask for another dbuser to create the new user
+			if [[ $setupmysql == [yY] || $dbreuse == [yY] ]]; then
+				local newdbuser=$dbuser
+				while [[ $dbuser == $newdbuser && $dbureuse != [yY] ]]; do
+					if [[ $dbhost == "localhost" ]]; then
+						# https://stackoverflow.com/questions/7364709/bash-script-check-if-mysql-database-exists-perform-action-based-on-result
+						[[ -z $(sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS -e "SELECT User FROM mysql.user;" | grep -ow $dbuser) ]] && newdbuser=""
+					else
+						[[ -z $(sudo mysql --connect-timeout=10 -h "$dburl" -P "$dbport" -u"$dburoot" -p"$dbproot" -e "SELECT User FROM mysql.user;" | grep -ow $dbuser) ]] && newdbuser=""
+					fi
+					
+					if [[ $newdbuser == $dbuser || $dbuser != $(dbword_check $dbuser user) ]]; then
+						echo ""
+						if [[ $newdbuser == $dbuser ]]; then
+							echo "${red}[ERROR] User ${blu}$dbuser ${red}already exists!${end}"
+							[[ $type == [35] ]] && exit 1 # Unattended sites should exit instead of asking
+							echo "${blu}Do you want to use this DB User for your new site? [y/N]"
+							while read -r -n 1 -s dbureuse; do
+							  local dbureuse=${dbureuse:-n}
+							  [[ $dbureuse == [YyNn] ]] && break
+							done
+						fi
+						if [[ $dbuser != $(dbword_check $dbuser user) ]]; then
+							if [[ $type == [24] ]]; then
+								newdbuser="Webinoly_$(pwgen -s -1)"
+								dbuser=$newdbuser
+								continue 1
+							fi
+							echo "${red}[ERROR] The DB User can not be a reserved word or should only contain allowed characters!${blu}"
+							dbureuse="n"
+						fi
+						
+						if [[ $dbureuse != [yY] ]]; then
+							echo ""
+							read -p "Please enter a new DB_User for your Database: " newdbuser
+							[[ -z "$newdbuser" ]] && newdbuser=$dbuser
+							dbuser=$newdbuser
+						elif [[ $dbureuse == [yY] ]]; then
+							# If you want to use a user that already exist, abort DB creation.
+							setupmysql="n"
+						fi
+					fi
+				done
+			fi
+			
+			if [[ $type != [2345] || $dbreuse == [yY] || $dbureuse == [yY] ]]; then
+				if [[ $dbureuse == [yY] ]]; then
+					read -p "${blu}Current Password:" dbpass
+					if [[ -z $dbpass ]]; then
+						done="0"
+						continue 1
+					fi
+				else
+					read -p "${blu}Create Password [$AUTOGENPASS_WPDB]:" dbpass
+					dbpass=${dbpass:-$AUTOGENPASS_WPDB}
+				fi
+				
+				# Not ask for wp_prefix when type=0 (mysql only site)
+				[[ $type == 1 ]] && read -p "Database Prefix [wp_]:" dbpref
+				dbpref=${dbpref:-wp_}
+				echo "${end}"
+			fi
+		
+			
+			# If DBuser will be reused, we need to check if data is valid to establish connection
+			if [[ $dbureuse == [yY] && (( $dbhost == "localhost" && $(check_mysql_connection localhost $dbuser $dbpass) != "true" ) || ( $dbhost != "localhost" && $(check_mysql_connection $dburl $dbport $dbuser $dbpass) != "true" )) ]]; then
+				done="0"
+				continue 1
+			elif [[ $dbureuse == [yY] ]]; then
+				echo "${gre}${dim}DB name and user successfully validated!${end}"
+			fi
+			# If only DBname will be reuse it, we need to reassing a new dbuser to this DB.
+			[[ $setupmysql != [yY] && $dbreuse == [yY] && $dbureuse != [yY] ]] && local dbreassign="db"
+			[[ $setupmysql != [yY] && $dbreuse != [yY] && $dbureuse == [yY] ]] && local dbreassign="dbuser"
+			
+		
+			# Database Configuration!
+			if [[ $setupmysql == [yY] || -n $dbreassign ]] ; then
+				if [[ $dbhost == "localhost" && -z $dbreassign ]]; then
+					# Starting with MySQL 8 you no longer can (implicitly) create a user using the GRANT command.
+					sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS <<_EOF_
+CREATE DATABASE $dbname;
+CREATE USER '${dbuser}'@'localhost' IDENTIFIED BY '${dbpass}';
+GRANT $(db_user_role) on ${dbname}.* to '${dbuser}'@'localhost';
+FLUSH PRIVILEGES;
+_EOF_
+				
+				elif [[ -z $dbreassign ]]; then
+					# We can not use GRAN ALL PRIVILIGES with AWS RDS, that's why are all separate.
+					sudo mysql --connect-timeout=10 -h "$dburl" -P "$dbport" -u"$dburoot" -p"$dbproot" <<_EOF_
+CREATE DATABASE ${dbname};
+CREATE USER '${dbuser}'@'%' IDENTIFIED BY '${dbpass}';
+GRANT $(db_user_role) on ${dbname}.* to '${dbuser}'@'%';
+FLUSH PRIVILEGES;
+_EOF_
+
+
+				# Reuse Database
+				elif [[ $dbhost == "localhost" && $dbreassign == "db" ]]; then
+					# Starting with MySQL 8 you no longer can (implicitly) create a user using the GRANT command.
+					sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS <<_EOF_
+CREATE USER '${dbuser}'@'localhost' IDENTIFIED BY '${dbpass}';
+GRANT $(db_user_role) on ${dbname}.* to '${dbuser}'@'localhost';
+FLUSH PRIVILEGES;
+_EOF_
+				
+				elif [[ $dbreassign == "db" ]]; then
+					# We can not use GRAN ALL PRIVILIGES with AWS RDS, that's why are all separate.
+					sudo mysql --connect-timeout=10 -h "$dburl" -P "$dbport" -u"$dburoot" -p"$dbproot" <<_EOF_
+CREATE USER '${dbuser}'@'%' IDENTIFIED BY '${dbpass}';
+GRANT $(db_user_role) on ${dbname}.* to '${dbuser}'@'%';
+FLUSH PRIVILEGES;
+_EOF_
+
+
+				# Reuse User
+				elif [[ $dbhost == "localhost" && $dbreassign == "dbuser" ]]; then
+					# Starting with MySQL 8 you no longer can (implicitly) create a user using the GRANT command.
+					sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS <<_EOF_
+CREATE DATABASE ${dbname};
+GRANT $(db_user_role) on ${dbname}.* to '${dbuser}'@'localhost';
+FLUSH PRIVILEGES;
+_EOF_
+				
+				elif [[ $dbreassign == "dbuser" ]]; then
+					# We can not use GRAN ALL PRIVILIGES with AWS RDS, that's why are all separate.
+					sudo mysql --connect-timeout=10 -h "$dburl" -P "$dbport" -u"$dburoot" -p"$dbproot" <<_EOF_
+CREATE DATABASE ${dbname};
+GRANT $(db_user_role) on ${dbname}.* to '${dbuser}'@'%';
+FLUSH PRIVILEGES;
+_EOF_
+
+
+				else
+					# Just in case
+					echo "${red}[ERROR] Whoops...Something went wrong!${end}"
+				fi
+				
+				if [ $? != "0" ]; then
+					done="0"
+					echo "${red}============================================"
+					echo "  [Error]: Database configuration failed."
+					echo "============================================${end}"
+					echo ""
+				elif [[ $dbreassign == "db" ]]; then 
+					echo "${gre}${dim}Database successfully reassigned and configured!${end}"
+				elif [[ $dbreassign == "dbuser" ]]; then 
+					echo "${gre}${dim}DB User successfully reassigned and configured!${end}"
+				fi
+			fi
+			
+			if [[ $done != "1" ]]; then
+				echo "${red}Some error ocurred during Database Configuration."
+				echo "${blu}Retry [Y/n]?"
+				while read -r -n 1 -s done; do
+				  done=${done:-y}
+				  [[ $done = [YyNn] ]] && break
+				done
+				[[ $done == [nN] ]] && done="1"
+			fi
+		done
+	fi
+	
+	# Display data just to confirm the DB creation.
+	if [[ $type == [45] ]]; then
+		echo "${blu}"
+		echo "Database Host: $dbhost"
+		echo "Database Name: $dbname"
+		echo "Database User: $dbuser"
+		echo "Password: $dbpass"
+		echo "${gre}"
+		echo "Database successfully created!"
+	fi
+	echo "${end}"
+	
+	#WP-Config.php auto-setup
+	if [[ $setupwp == [yY] ]] ; then
+		[[ -z $subfolder ]] && local wpcon="/var/www/$domain/wp-config.php" || local wpcon="/var/www/$domain/htdocs$subfolder/wp-config.php"
+		cp /var/www/$domain/htdocs$subfolder/wp-config-sample.php $wpcon
+		
+		# Fill new wp-config with data
+		wp_config_write $domain DB_NAME \'$dbname\' $subfolder
+		wp_config_write $domain DB_USER \'$dbuser\' $subfolder
+		wp_config_write $domain DB_PASSWORD \'$dbpass\' $subfolder
+		wp_config_write $domain DB_HOST \'$dbhost\' $subfolder
+		
+		sudo sed -i "/table_prefix/c \$table_prefix  = '$dbpref';" $wpcon
+		
+		wp_config_write $domain AUTH_KEY \'$(pwgen -s -1 64)\' $subfolder
+		wp_config_write $domain SECURE_AUTH_KEY \'$(pwgen -s -1 64)\' $subfolder
+		wp_config_write $domain LOGGED_IN_KEY \'$(pwgen -s -1 64)\' $subfolder
+		wp_config_write $domain NONCE_KEY \'$(pwgen -s -1 64)\' $subfolder
+		wp_config_write $domain AUTH_SALT \'$(pwgen -s -1 64)\' $subfolder
+		wp_config_write $domain SECURE_AUTH_SALT \'$(pwgen -s -1 64)\' $subfolder
+		wp_config_write $domain LOGGED_IN_SALT \'$(pwgen -s -1 64)\' $subfolder
+		wp_config_write $domain NONCE_SALT \'$(pwgen -s -1 64)\' $subfolder
+		
+		# Redis Conf
+		wp_config_write $domain WP_REDIS_SELECTIVE_FLUSH true $subfolder
+		wp_config_write $domain WP_CACHE_KEY_SALT \'wp_$domain$(echo $subfolder | sed "s/\//_/g")\' $subfolder
+	fi
+	
+	warning_messages
+}
+
+
+db_delete() {	
+	wp_conf_retrieve $1 $subfolder
+	[[ -z $wp_config ]] && return
+	[[ $wp_dbhost != "localhost" ]] && check_for_mysql_client
+	
+	if [[ ( $wp_dbhost == "localhost" &&  ( $(conf_read mysql) != "true" || $(check_mysql_connection localhost) != "true" )) || ( $wp_dbhost != "localhost" && $(check_mysql_connection $extdb_url $extdb_port $extdb_user $extdb_pass) != "true" ) ]]; then
+		echo "${red}[ERROR] Database${blu} $domain ${red}cannot be deleted!${end}"
+		return
+	fi
+	
+	dbsetup="DELETE FROM mysql.user WHERE User='$wp_dbuser';DROP DATABASE IF EXISTS $wp_dbname;DELETE FROM mysql.db WHERE Db='$wp_dbname' OR Db='$wp_dbname\\_%';FLUSH PRIVILEGES;"
+	if [[ $wp_dbhost == "localhost" ]]; then
+		sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS -e "$dbsetup"
+		echo "${gre}Database of your site ${blu}${domain}${subfolder}${gre} has been successfully deleted! ${end}"
+	else
+		if [[ $extdb_user == "root" && -z $extdb_pass ]]; then
+			echo "${red}Action aborted, database not deleted!${end}"
+		else
+			sudo mysql --connect-timeout=10 -h "$extdb_url" -P "$extdb_port" -u"$extdb_user" -p"$extdb_pass" -e "$dbsetup"
+			echo "${gre}Database of your site ${blu}${domain}${subfolder}${gre} has been successfully deleted! ${end}"
+		fi
+	fi
+}
+
+
+deletesite() {
+	if [[ $domain == $(conf_read tools-site) && -z $delete_all && $delete != "force" ]]; then
+		echo "${red}[ERROR] Can not delete a site that is assigned to access your server tools (Tools-Site)!${end}"
+		exit 1
+	elif [[ $domain == $(conf_read default-site) && -z $delete_all && $delete != "force" ]]; then
+		echo "${red}[ERROR] Can not delete a site that is set as default site!${end}"
+		exit 1
+	fi
+	if [[ $domain == $(conf_read tools-site) && ( -n $delete_all || $delete == "force" ) ]]; then
+		echo "${red}[WARNING] This site is set to be used to access your server tools. Deleting this site can cause unexpected behaviour in your server."
+		sudo webinoly -tools-site=default
+	fi
+	if [[ $domain == $(conf_read default-site) && ( -n $delete_all || $delete == "force" ) ]]; then
+		echo "${red}[WARNING] This site is set as default site. Deleting this site can cause unexpected behaviour in your server."
+		sudo webinoly -default-site=default
+	fi
+	
+	[[ $delete == "force" ]] && local dbdel="Y"
+	[[ $delete == "keep-db" ]] && local dbdel="N"
+
+	# Check if site contains WP in subfolders.
+	if [[ -z $dbdel || $dbdel = [Yy] ]]; then
+		for site in "/etc/nginx/apps.d/$domain_"*-wpcommon.conf
+		do 
+			subfolder="/$(echo $site | cut -f 2- -d "_" -s | cut -f -1 -d "-" -s | sed "s/_/\//g")"
+			if [[ -n $subfolder && -f /var/www/$domain/htdocs$subfolder/wp-config.php ]]; then
+				if ! [[ $delete =~ ^(force|keep-db)$ ]]; then
+					echo "${blu}Delete Database [Y/n]?${end}"
+					while read -r -n 1 -s dbsubdel; do
+					  local dbsubdel=${dbsubdel:-y}
+					  [[ $dbsubdel = [YyNn] ]] && break
+					done
+				fi
+				if [[ $dbsubdel == [yY] || $dbdel == [yY] ]]; then
+					db_delete $domain
+					sudo rm -rf /var/www/$domain/htdocs$subfolder
+				fi
+			fi
+			subfolder=""
+		done
+	fi
+	
+	# Determine if main site is WP, so you should delete the DB too.
+	if [[ ( -z $dbdel || $dbdel = [Yy] ) && ( -f /var/www/$domain/wp-config.php || -f /var/www/$domain/htdocs/wp-config.php ) ]]; then
+		if ! [[ $delete =~ ^(force|keep-db)$ ]]; then
+			echo "${blu}Delete Database [Y/n]?${end}"
+			while read -r -n 1 -s dbdel; do
+			  local dbdel=${dbdel:-y}
+			  [[ $dbdel = [YyNn] ]] && break
+			done
+		fi
+		[[ $dbdel == [yY] ]] && db_delete $domain
+	fi
+	
+	# Revoke SSL Cert
+	if [[ -d /etc/letsencrypt/live/$domain && -z $revoke && $delete != "force" ]]; then
+		echo "${blu}Revoke SSL Cert [Y/n]?${end}"
+		while read -r -n 1 -s revoke; do
+		  local revoke=${revoke:-y}
+		  [[ $revoke = [YyNn] ]] && break
+		done
+	fi
+	[[ $revoke =~ ^(on|y|Y)$ && -d /etc/letsencrypt/live/$domain ]] && ssl_revoke
+	
+	
+	# Delete site files
+	sudo rm -rf /etc/nginx/apps.d/$domain*.conf
+	sudo rm -rf /etc/nginx/apps.d/.htpasswd-$domain
+	sudo rm -rf /etc/nginx/sites-available/$domain
+	sudo rm -rf /etc/nginx/sites-enabled/$domain
+	sudo rm -rf /var/www/$domain
+	
+	echo "${gre}Site${blu} $domain ${gre}has been successfully deleted!${end}"
+}
+
+
+create_empty_site() {
+	createsite
+	sudo sed -i '/ common\/php.conf;/d' /etc/nginx/sites-available/$domain
+}
+
+
+createsite() {
+	api-events_update si1
+	
+	# First check if valid TLD
+	[[ -z $tld ]] && echo "${dim}[WARNING] Domain name is not a valid TLD (Top Level Domain).${end}"
+	
+	# Check domain and then prevent reserved characters for file names.
+	if [[ $(is_domain $domain) != "true" ]]; then
+		echo "${red}[ERROR] Domain names can only contain letters, numbers or a hyphen; can not start or end with a hyphen or period or having two periods together, and can be up to 67 characters long.${end}"
+		exit 1
+	fi
+	
+	# Check for reserved domain names
+	if [[ $domain == "default" ]]; then
+		echo "${red}[ERROR] Domain name reserved!${end}"
+		exit 1
+	fi
+	
+	# Check for duplicate sites
+	if [[ -f /etc/nginx/sites-available/$domain ]]; then
+		echo "${red}[ERROR] Can not create site${blu} $domain ${red}because already exists!${end}"
+		exit 1
+	fi
+	
+	sudo cp /opt/webinoly/templates/template-site-php /etc/nginx/sites-available/$domain
+	
+	if [[ $subdomain == "true" ]]; then
+		# Remove www support for subdomains - only main domain will support both www and non-www.
+		sudo sed -i "s/ www.domain.com;/;/g"  /etc/nginx/sites-available/$domain
+		
+		# WWW Subdomain Warning!
+		if [[ ${sub_domain,,} == "www" ]]; then
+			echo "${red}[WARNING] You're creating a site with a WWW subdomain and it won't respond to main domain ${blu}'$main_domain'${red} requests."
+			echo "Sites created with the main domain are automatically configured to respond to both www and non-www requests."
+			echo "${end}"
+		fi
+	fi
+
+	# Nginx conf file for the new site (-php conf is default)
+	sudo sed -i "s/domain.com/$domain/g"  /etc/nginx/sites-available/$domain
+	
+	sudo chmod 644 /etc/nginx/sites-available/$domain
+	sudo chown root:root /etc/nginx/sites-available/$domain
+	sudo ln -s /etc/nginx/sites-available/$domain /etc/nginx/sites-enabled/$domain
+	
+	# Create data folder for new site
+	if [[ -z $proxy && -z $parked ]]; then
+		if [[ ! -d /var/www/$domain/htdocs ]]; then
+			sudo mkdir -p /var/www/$domain/htdocs
+			[[ $type == [123] ]] && wpinstall
+		else
+			echo "${blu}"
+			echo "  We found a folder with${end} $domain ${blu}site data, do you want to use it [Y/n]? "
+			while read -r -n 1 -s wwwexist; do
+			  wwwexist=${wwwexist:-y}
+			  [[ $wwwexist == [YyNn] ]] && break
+			done
+			echo ""
+			
+			if [[ $wwwexist == [nN] ]]; then
+				sudo rm -rf /var/www/$domain
+				sudo mkdir -p /var/www/$domain/htdocs
+				[[ $type == [123] ]] && wpinstall
+			fi
+		fi
+	fi
+
+	# Activate FastCgi cache
+	if [[ $cache == "on" && $type == [123] ]]; then
+		sudo sed -i '/php.conf/c \	include common/wpfc.conf;' /etc/nginx/sites-available/$domain
+		[[ -z $wp_cache_plugins || $wp_cache_plugins == "on" ]] && wp_cache_plugins
+		echo "${gre}WordPress Cache successfully enabled!${end}"
+	fi
+	
+	# Check if only-error log is enabled
+	[[ $(conf_read global-access-log-off) == "true" && $domain != $(conf_read tools-port) ]] && sudo log $domain -only-error=on > /dev/null 2>&1
+	
+	sudo chown -R www-data:www-data /var/www
+	[[ $(conf_read login-www-data) == "true" ]] && sudo chown root:root /var/www
+
+	warning_messages
+	echo "${gre}Site${blu} $domain$subfolder ${gre}has been successfully created!${end}"
+}
+
+
+force_redirect() {
+	if ! [[ $force_redirect =~ ^(www|root|off)$ ]]; then
+		echo "${red}[ERROR] Please, enter a valid argument!${end}"
+		exit 1
+	fi
+	if [[ $subdomain == "true" ]]; then
+		echo "${red}[ERROR] Please, use the main/root domain, Force-Redirection should not be used in Subdomains!${end}"
+		exit 1
+	fi
+	
+	local rediron=$( grep -F "WebinolyWWWredirectStart" /etc/nginx/sites-available/$domain )
+	local sername="server_name $domain www.$domain;"
+	cp /opt/webinoly/templates/template-site-wwwredirect /tmp/template-site-wwwredirect
+	[[ $(is_ssl $domain) == "true" ]] && local scheme="https" || local scheme="http"
+	
+	case $force_redirect in
+		"www")
+			[[ -n $rediron ]] && sudo sed -i '/WebinolyWWWredirectStart/,/WebinolyWWWredirectEnd/{/.*/d}' /etc/nginx/sites-available/$domain
+			[[ $(is_wp $domain) == "true" ]] && edit_wp_db_url $domain "${scheme}://www.${domain}"
+			
+			sudo sed -i "/#server_name;/c \	server_name $domain;" /tmp/template-site-wwwredirect
+			sudo sed -i "/#return 301;/c \	return 301 \$scheme://www.${domain}\$request_uri;" /tmp/template-site-wwwredirect
+			sudo sed -i "/server_name /c \	server_name www.$domain;" /etc/nginx/sites-available/$domain
+			
+			echo "${gre}Force-Redirection to WWW has been successfully enabled!${end}"
+		;;
+		"root")
+			[[ -n $rediron ]] && sudo sed -i '/WebinolyWWWredirectStart/,/WebinolyWWWredirectEnd/{/.*/d}' /etc/nginx/sites-available/$domain
+			[[ $(is_wp $domain) == "true" ]] && edit_wp_db_url $domain "${scheme}://${domain}"
+			
+			sudo sed -i "/#server_name;/c \	server_name www.$domain;" /tmp/template-site-wwwredirect
+			sudo sed -i "/#return 301;/c \	return 301 \$scheme://${domain}\$request_uri;" /tmp/template-site-wwwredirect
+			sudo sed -i "/server_name /c \	server_name $domain;" /etc/nginx/sites-available/$domain
+			echo "${gre}Force-Redirection to non-WWW has been successfully enabled!${end}"
+		;;
+		"off")
+			if [[ -n $rediron ]]; then
+				[[ $(is_wp $domain) == "true" ]] && edit_wp_db_url $domain "${scheme}://${domain}"
+			
+				sudo sed -i '/WebinolyWWWredirectStart/,/WebinolyWWWredirectEnd/{/.*/d}' /etc/nginx/sites-available/$domain
+				sudo sed -i "/server_name /c \	$sername" /etc/nginx/sites-available/$domain
+				echo "${gre}Force-Redirection has been successfully disabled!${end}"
+			else
+				echo "${red}Force-Redirect is already disabled for site${blu} $domain ${end}"
+			fi
+		;;
+	esac
+	
+	# If SSL is enabled insert after that - First redirect should be to HTTPS due to HSTS.
+	if [[ $(is_ssl $domain) == "false" && $force_redirect =~ ^(www|root)$ ]]; then
+		sudo sed -i '1r /tmp/template-site-wwwredirect' /etc/nginx/sites-available/$domain
+	elif [[ $(is_ssl $domain) == "true" && $force_redirect =~ ^(www|root)$ ]]; then
+		sudo sed -i '/listen 80/c \	listen 443 ssl http2;' /tmp/template-site-wwwredirect
+		sudo sed -i '/listen \[::\]:80/c \	listen [::]:443 ssl http2;' /tmp/template-site-wwwredirect
+	
+		if [[ -z $ignore_ssl ]]; then
+			sudo sed -i '/headers-http.conf/a \	include common/headers-https.conf;' /tmp/template-site-wwwredirect
+			sudo sed -i '/server_name /r /opt/webinoly/templates/template-site-ssl' /tmp/template-site-wwwredirect
+			
+			local ssl_cer=$(sed -n -e '/WebinolyNginxServerStart/,$p' /etc/nginx/sites-available/$domain | grep -F "ssl_certificate " | tr -d '\t')
+			local ssl_key=$(sed -n -e '/WebinolyNginxServerStart/,$p' /etc/nginx/sites-available/$domain | grep -F "ssl_certificate_key " | tr -d '\t')
+			local ssl_tru=$(sed -n -e '/WebinolyNginxServerStart/,$p' /etc/nginx/sites-available/$domain | grep -F "ssl_trusted_certificate " | tr -d '\t')
+			
+			sudo sed -i "/ssl_certificate /c\	$ssl_cer" /tmp/template-site-wwwredirect
+			sudo sed -i "/ssl_certificate_key /c\	$ssl_key" /tmp/template-site-wwwredirect
+			
+			if [[ -z $ssl_tru ]]; then
+				sudo sed -i '/ssl_stapling/d' /tmp/template-site-wwwredirect
+				sudo sed -i '/ssl_trusted_certificate/d' /tmp/template-site-wwwredirect
+			else
+				sudo sed -i "/ssl_trusted_certificate /c\	$ssl_tru" /tmp/template-site-wwwredirect
+			fi
+		fi
+		
+		sudo sed -i "/WebinolySSLredirectStart/,/WebinolySSLredirectEnd/s/\(server_name\).*$/$sername/" /etc/nginx/sites-available/$domain
+		sudo sed -i '/WebinolySSLredirectEnd/r /tmp/template-site-wwwredirect' /etc/nginx/sites-available/$domain
+	fi
+	
+	sudo rm /tmp/template-site-wwwredirect
+
+}
+
+
+redirection_manager() {
+	if [[ -n $list ]]; then
+		[[ -n $raw || $list == "raw" ]] && echo "" || echo "${gre}"
+		
+		if [[ -f /etc/nginx/apps.d/$domain-nginx.conf ]]; then
+			isred=$( grep -P "^# RedirectFrom: " /etc/nginx/apps.d/$domain-nginx.conf )
+			sudo sed -n '/RedirectFrom/{h;d;}; H; /To:/{x;p;}' /etc/nginx/apps.d/$domain-nginx.conf | sed '/# To:/ s/$/\n/' | sed 's/^# //'
+		fi
+		[[ -z $isred && -z $raw && $list != "raw" ]] && echo "${blu}[Empty] No redirections were found!${end}"
+	
+		[[ -n $raw || $list == "raw" ]] && echo "" || echo "${end}"
+	elif [[ -n $delete ]]; then
+		echo ""
+		[[ -z $from || $from == "true" ]] && read -p "${blu}Redirect 'from path' to delete: ${end}" from
+		if [[ -z $from ]]; then
+			echo "${red}[ERROR] Please, enter a valid 'from' path!${end}"
+			exit 1
+		fi
+		
+		if [[ -f /etc/nginx/apps.d/$domain-nginx.conf ]]; then
+			sudo sed -Ei "/^# RedirectFrom: $(escaped_string $from)( .*)?$/,/^# RedirectEnd/{/.*/d}" /etc/nginx/apps.d/$domain-nginx.conf
+			
+			if [[ ! -s /etc/nginx/apps.d/$domain-nginx.conf ]]; then
+				sudo rm /etc/nginx/apps.d/$domain-nginx.conf
+				sudo sed -i "/$domain-nginx.conf;/d" /etc/nginx/sites-available/$domain
+			fi
+		fi
+		echo "${gre}Redirection successfully removed!${end}"
+	else
+		if [[ $(is_forward $domain) == "true" ]]; then
+			echo "${red}[ERROR] Forwarded domains are not allowed!${end}"
+			exit 1
+		fi
+		
+		# Default values
+		[[ -z $http_code ]] && http_code="302"
+		[[ $regex == "true" ]] && regex="sensitive"
+		
+		echo ""
+		[[ -z $from || $from == "true" ]] && read -p "${blu}Redirect from: ${end}" from
+		[[ -z $to || $to == "true" ]] && ! [[ $http_code =~ ^(410|444|451)$ ]] && read -p "${blu}Redirect to: ${end}" to
+		echo ""
+		
+		if [[ -f /etc/nginx/apps.d/$domain-nginx.conf && -n $( grep -E "^# Path: ${from}( \([Exact]+\))?$" /etc/nginx/apps.d/$domain-nginx.conf ) ]]; then
+			echo "${red}[ERROR] Protected paths are not allowed for redirections!${end}"
+			exit 1
+		elif [[ -z $from || ( -z $to && $http_code =~ ^(301|302|303|307|308)$ ) ]]; then
+			echo "${red}[ERROR] Please, enter a valid from/to redirection path!${end}"
+			exit 1
+		elif [[ $from == "/" ]]; then
+			echo "${red}[ERROR] Root folder redirection is not allowed, use the 'domain forwarding' feature if want to redirect a complete domain!${end}"
+			exit 1
+		elif ! [[ $http_code =~ ^(301|302|303|307|308|410|444|451)$ ]]; then
+			echo "${red}[ERROR] Invalid redirection HTTP Code!${end}"
+			exit 1
+		elif [[ -n $regex ]] && ! [[ $regex =~ ^(sensitive|insensitive|longest)$ ]]; then
+			echo "${red}[ERROR] Invalid regex value!${end}"
+			exit 1
+		elif [[ ( -z $regex || -n $exact ) && $(is_url_path $from) != "true" ]]; then
+			echo "${red}[ERROR] Please, enter a valid 'FROM' redirection path!${end}"
+			exit 1
+		elif [[ -n $to && $(is_url_path $to) != "true" ]] && ! [[ $(is_url $to) =~ ^(http|https)$ ]]; then
+			if [[ $(is_url $to) == "true" ]]; then
+				to="http://${to}"
+			else
+				echo "${red}[ERROR] Please, enter a valid 'TO' redirection path!${end}"
+				exit 1
+			fi
+		fi
+		
+		if [[ ! -f /etc/nginx/apps.d/$domain-nginx.conf ]]; then
+			sudo touch /etc/nginx/apps.d/$domain-nginx.conf
+			sudo chmod 644 /etc/nginx/apps.d/$domain-nginx.conf
+			sudo chown -R root:root /etc/nginx/apps.d/$domain-nginx.conf
+		fi
+		
+		local exisa=$( grep -G "^# RedirectFrom: $(escaped_string $from)$" /etc/nginx/apps.d/$domain-nginx.conf )
+		local exisb=$( grep -G "^# RedirectFrom: $(escaped_string $from) (Regex)$" /etc/nginx/apps.d/$domain-nginx.conf )
+		local exisc=$( grep -G "^# RedirectFrom: $(escaped_string $from) (Exact)$" /etc/nginx/apps.d/$domain-nginx.conf )
+		
+		# Can have both at the same time, one exact and another.
+		if [[ ( -z $exisc && $exact == "true" ) || ( -z $exisa && -z $exisb && -z $exact ) ]]; then
+			if [[ $exact == true ]]; then
+				sign="= "
+				code="$from (Exact)"
+			elif [[ $regex == "sensitive" ]]; then
+				sign="~ "
+				code="$from (Regex)"
+			elif [[ $regex == "insensitive" ]]; then
+				sign="~* "
+				code="$from (Regex)"
+			elif [[ $regex == "longest" ]]; then
+				sign="^~ "
+				code="$from (Regex)"
+			else
+				sign=""
+				code="$from"
+			fi
+			
+			if [[ $http_code =~ ^(301|302|303|307|308)$ ]]; then
+				echo "# RedirectFrom: ${code}
+# To: $to ($http_code)
+location $sign$from {
+	return $http_code $to;
+}
+# RedirectEnd" >> /etc/nginx/apps.d/$domain-nginx.conf
+			elif [[ $http_code =~ ^(410|444|451)$ ]]; then
+				echo "# RedirectFrom: ${code}
+# To: $to ($http_code)
+location $sign$from {
+	return $http_code;
+}
+# RedirectEnd" >> /etc/nginx/apps.d/$domain-nginx.conf
+			fi
+			
+			vconf=$( grep -E "include apps.d/$domain-nginx.conf;" /etc/nginx/sites-available/$domain )
+			[[ -z $vconf ]] && sudo sed -i "/# WebinolyCustom$/a \	include apps.d/$domain-nginx.conf;" /etc/nginx/sites-available/$domain
+			
+			# Last verification
+			if ! sudo nginx -t > /dev/null 2>&1; then
+				sudo site $domain -redirection -from=$from -delete > /dev/null 2>&1
+				echo "${red}[ERROR] Seems like you are using some invalid Nginx values or characters!${end}"
+				exit 1
+			fi
+			
+			echo "${gre}Redirection successfully added!${end}"
+		else
+			echo "${gre}Redirection already exists!${end}"
+		fi
+		
+		
+	fi
+
+}
+
+
+delete_all_sites() {
+	echo "${red}"
+	echo "All your sites files will be removed."
+	echo "This action will only delete Databases attached to a WordPress site, any other Database will not be deleted."
+	
+	if ! [[ $delete_all =~ ^(force|keep-db)$ ]]; then
+		echo "${blu}"
+		echo "Are you sure [y/N]? ${end}"
+		while read -r -n 1 -s answer; do
+			answer=${answer:-n}
+			echo ""
+			[[ $answer = [YyNn] ]] && break
+		done
+		
+		if [[ $answer == [Nn] ]]; then
+			echo "${red}Action aborted!${end}"
+			exit 1
+		fi
+	fi
+	
+	# List all remaining sites (parked and proxy)
+	for site in "/etc/nginx/sites-available"/*
+	do
+		[[ $delete_all == "keep-db" ]] && delete="keep-db" || delete="force"
+		domain=$(echo $site | cut -f 5 -d "/")
+		[[ $domain != "default" && $domain != $(conf_read tools-port) && $domi != *".dpkg-"* ]] && deletesite
+	done
+	
+	# Delete all files - double check!
+	# -rf is necessary to not generate an error when is empty.
+	sudo rm -rf /etc/nginx/sites-available/!(default|$(conf_read tools-port)|*".dpkg-"*)
+	sudo rm -rf /etc/nginx/sites-enabled/!(default|$(conf_read tools-port))
+	sudo rm -rf /var/www/!(html|$(conf_read tools-port))
+	echo ""
+	echo "${gre}All sites and data has been deleted successfully!${end}"
+}
+
+
+php_subfolder() {
+	[[ -n $wp || $(conf_read php-info) == "false" ]] && local file="php.conf" || local file="phpx.conf"
+	
+	sudo sed -i "/# WebinolyCustom$/a \	include apps.d/$domain$subname-$file;" /etc/nginx/sites-available/$domain
+	sudo sed -i '/index /c \	index index.php index.html index.htm;' /etc/nginx/sites-available/$domain
+	
+	sudo cp /etc/nginx/common/$file /etc/nginx/apps.d/$domain$subname-$file
+	sudo sed -i "/^location \/ {/c location $subfolder/ {" /etc/nginx/apps.d/$domain$subname-$file
+	sudo sed -i "/^location ~\* /c location ~* $subfolder/\.*\\\.php\$ {" /etc/nginx/apps.d/$domain$subname-$file
+	sudo sed -i "s#/index.php#$subfolder/index.php#" /etc/nginx/apps.d/$domain$subname-$file
+}
+
+
+wp_subfolder() {
+	php_subfolder
+	sudo sed -i "/^# DO NOT MODIFY, /a include apps.d/$domain$subname-wpcommon.conf;" /etc/nginx/apps.d/$domain$subname-php.conf
+	
+	sudo cp /etc/nginx/common/wpfc.conf /etc/nginx/apps.d/$domain$subname-wpfc.conf
+	sudo sed -i "/^location \/ {/c location $subfolder/ {" /etc/nginx/apps.d/$domain$subname-wpfc.conf
+	sudo sed -i "/^location ~\* /c location ~* $subfolder/\.*\\\.php\$ {" /etc/nginx/apps.d/$domain$subname-wpfc.conf
+	sudo sed -i "s#/index.php#$subfolder/index.php#" /etc/nginx/apps.d/$domain$subname-wpfc.conf
+	sudo sed -i "/^# DO NOT MODIFY, /a include apps.d/$domain$subname-wpcommon.conf;" /etc/nginx/apps.d/$domain$subname-wpfc.conf
+	
+	sudo cp /etc/nginx/common/wpcommon.conf /etc/nginx/apps.d/$domain$subname-wpcommon.conf
+	sed -ri "s/location(.*) \/(.*) \{$/location\1 subfolder\/\2 \{/" /etc/nginx/apps.d/$domain$subname-wpcommon.conf
+	sudo sed -i "s#subfolder#$subfolder#g" /etc/nginx/apps.d/$domain$subname-wpcommon.conf
+	
+	sudo cp /etc/nginx/common/wpcommon-noauth.conf /etc/nginx/apps.d/$domain$subname-wpcommon-noauth.conf
+	sed -ri "s/location(.*) \/(.*) \{$/location\1 subfolder\/\2 \{/" /etc/nginx/apps.d/$domain$subname-wpcommon-noauth.conf
+	sudo sed -i "s#subfolder#$subfolder#g" /etc/nginx/apps.d/$domain$subname-wpcommon-noauth.conf
+	
+	sudo cp /etc/nginx/common/yoast-sitemap.conf /etc/nginx/apps.d/$domain$subname-yoast-sitemap.conf
+	sudo sed -i "s#/index.php#$subfolder/index.php#g" /etc/nginx/apps.d/$domain$subname-yoast-sitemap.conf
+	
+	[[ $(conf_read wp-admin-auth) == "purged" ]] && sudo httpauth $domain -wp-admin=off -subfolder=$subfolder > /dev/null 2>&1
+	[[ $(conf_read yoast-sitemap) == "true" ]] && sudo site $domain -yoast-sitemap=on -subfolder=$subfolder > /dev/null 2>&1
+	
+	# Activate FastCgi cache
+	if [[ $cache == "on" ]]; then
+		sudo sed -i "/$domain$subname-php.conf;/c \	include apps.d/$domain$subname-wpfc.conf;" /etc/nginx/sites-available/$domain
+		[[ -z $wp_cache_plugins || $wp_cache_plugins == "on" ]] && wp_cache_plugins
+		echo "${gre}WordPress Cache successfully enabled!${end}"
+	fi
+		
+	sudo chown -R www-data:www-data /var/www
+	[[ $(conf_read login-www-data) == "true" ]] && sudo chown root:root /var/www
+	echo "${gre}WordPress has been successfully installed in${blu} $domain$subfolder ${gre}subfolder!${end}"
+}
+
+
+wp_multisite_convertion() {
+	wp_config_write $domain WP_ALLOW_MULTISITE true $subfolder
+
+	echo "${blu}"
+	echo "In your WordPress dashboard, go to ${end}“Tools -> Network Setup”${blu},"
+	echo "select the type of WP Multisite installation you want (Subdomain or Subdirectory)"
+	echo "and then press the ${end}“Install”${blu} button at the bottom."
+	echo ""
+	echo "After that, you don't need to modify any file, please, don't touch any line of code."
+	echo "We will do it for you!"
+	echo ""
+	echo "${gre}Waiting... we will automatically finish the multisite configuration after you do the install in the WP dashboard!${blu}"
+	echo "Write ${end}'quit'${blu} and press ${end}<Enter>${blu} to exit and abort this operation."
+	echo "${end}"
+	
+	conf_write quiet true
+	while [[ -z $passed || $passed == "false" ]]; do
+		if read -t0; then
+			read pas
+			[[ $pas == "quit" ]] && break
+		fi
+		sleep 2
+		passed=$(is_wp_multisite $domain $subfolder)
+	done
+	conf_delete quiet
+	
+	if [[ $passed == "false" && $pas == "quit" ]]; then
+		wp_config_delete $domain WP_ALLOW_MULTISITE $subfolder
+		echo "${red}[ERROR] Action aborted!${end}"
+		exit 1
+	elif [[ $passed =~ ^(subdomain|subdirectory)$ ]]; then
+		# Multisite wp-config
+		wp_config_write $domain MULTISITE true $subfolder
+		wp_config_write $domain DOMAIN_CURRENT_SITE \'$domain\' $subfolder
+		wp_config_write $domain PATH_CURRENT_SITE \'$subfolder/\' $subfolder
+		wp_config_write $domain SITE_ID_CURRENT_SITE 1 $subfolder
+		wp_config_write $domain BLOG_ID_CURRENT_SITE 1 $subfolder
+		
+		[[ $pas == "quit" ]] && echo "${red}Can not cancel because the installation was already done!${end}"
+		
+		if [[ $passed == "subdomain" ]]; then
+			wp_config_write $domain SUBDOMAIN_INSTALL true $subfolder
+			sudo sed -i "/server_name /c \	server_name $domain *.$domain;" /etc/nginx/sites-available/$domain
+			echo "${gre}Subdomain Multisite configuration has been successfully completed!${end}"
+		elif [[ $passed == "subdirectory" ]]; then
+			wp_config_write $domain SUBDOMAIN_INSTALL false $subfolder
+			
+			if [[ -z $subfolder ]]; then
+				sudo sed -i '/locations.conf/i \	include common/wpsubdir.conf;' /etc/nginx/sites-available/$domain
+			else
+				sudo cp /etc/nginx/common/wpsubdir.conf /etc/nginx/apps.d/$domain$subname-wpsubdir.conf
+				sudo sed -i "/DO NOT MODIFY/a \include apps.d\/$domain$subname-wpsubdir.conf;" /etc/nginx/apps.d/$domain$subname-php.conf
+				sudo sed -i "/DO NOT MODIFY/a \include apps.d\/$domain$subname-wpsubdir.conf;" /etc/nginx/apps.d/$domain$subname-wpfc.conf
+				sed -i "s#\^(#\^$subfolder\(#" /etc/nginx/apps.d/$domain$subname-wpsubdir.conf
+				sed -i "s#\$2#$subfolder\$2#" /etc/nginx/apps.d/$domain$subname-wpsubdir.conf
+			fi
+			
+			echo "${gre}Subdirectory Multisite configuration has been successfully completed!${end}"
+		fi
+	else
+			wp_config_delete $domain WP_ALLOW_MULTISITE $subfolder
+			echo "${red}[ERROR] Multisite installation incomplete or not detected!${end}"
+			exit 1
+	fi
+}
+
+
+parked_domain() {
+	[[ $parked == true ]] && read -p "${blu}Main site domain: ${end}" parked
+	if [[ ! -f /etc/nginx/sites-available/$parked ]]; then
+		echo "${red}[ERROR] Main site domain not found! ${end}"
+		exit 1
+	elif [[ $(is_forward $parked) == "true" ]]; then
+		echo "${red}[ERROR] Parked site cannot point to a forwarded site! ${end}"
+		exit 1
+	elif [[ $(is_parked $parked) == "true" ]]; then
+		echo "${red}[ERROR] Parking a site using a parked site as main site is not allowed! ${end}"
+		exit 1
+	elif [[ $(is_empty_root_site $parked) == "true" ]]; then
+		echo "${red}[ERROR] Invalid main site!${end}"
+		exit 1
+	fi
+	
+	createsite
+	
+	# Nginx conf file for the new parked domain
+	sername=$(grep -o "server_name .*;" /etc/nginx/sites-available/$domain)
+	sudo truncate -s 0 /etc/nginx/sites-available/$domain
+	sudo cat /etc/nginx/sites-available/$parked > /etc/nginx/sites-available/$domain
+	
+	# Prevent if SSL is enabled in main site and ssl data is copied to parked site causing an error.
+	sudo site $domain -ssl=off -revoke=off > /dev/null 2>&1
+	
+	# Prevent if main site is default.
+	[[ $(conf_read default-site) == $parked ]] && remove_nginx_default_server $domain
+	
+	sudo sed -i "/include apps.d\/$parked-nginx.conf/d" /etc/nginx/sites-available/$domain
+	sudo sed -i "/server_name/c \	$sername" /etc/nginx/sites-available/$domain
+	sudo sed -i "s/$parked/$domain/g"  /etc/nginx/sites-available/$domain
+	sudo sed -i "/include apps.d\/.*-proxy.conf;/{s/$domain/$parked/g}"  /etc/nginx/sites-available/$domain
+	sudo sed -i "/root/c \	root /var/www/$parked/htdocs;" /etc/nginx/sites-available/$domain
+	
+	# Remove any conf file, this means we will not have subfolder support for parked sites, Should it be supported?
+	sudo sed -i "/WebinolyCustom/,/WebinolyCustomEnd/ {/include apps.d\/${domain}.*conf;/d}" /etc/nginx/sites-enabled/$domain
+	
+	cusconl=$( grep -o "include /var/www/$domain/.*" /etc/nginx/sites-available/$domain | sed "s/$domain/$parked/" )
+	sed -i "/include \/var\/www\/$domain/c \	${cusconl}" /etc/nginx/sites-available/$domain
+	
+	echo "${gre}"
+	echo "Parked domain was successfully configured! "
+	echo "${end}"
+}
+
+
+forward_domain() {
+	[[ -z $forward || $forward == "true" ]] &&	read -p "${gre}Destination domain: ${end}" forward
+	if ! [[ $(is_url $forward) =~ ^(http|https|true)$ ]]; then
+		echo "${red}[ERROR] Invalid destination domain!${end}"
+		exit 1
+	elif [[ $(is_url $forward) == "true" ]]; then
+		forward="http://${forward}"
+	fi
+	
+	createsite
+	sudo rm -rf /var/www/$domain
+	sudo sed -i '/access_log/,/-nginx.conf;/{/.*/d}' /etc/nginx/sites-available/$domain
+	
+	if [[ $root == "on"  ]]; then
+		sudo sed -i "/server_name /a \	return 301 $forward;" /etc/nginx/sites-available/$domain
+	else
+		sudo sed -i "/server_name /a \	return 301 $forward\$request_uri;" /etc/nginx/sites-available/$domain
+	fi
+	
+	echo "${blu}Every request to${end} $domain ${blu}will be redirected to ${end}$forward"
+}
+
+
+reverse_proxy() {
+	if [[ $proxy != true ]]; then
+		firstchar=$(echo "${proxy}" | cut -c-1)
+		lastchar=$(echo "${proxy}" | rev | cut -c-1)
+		
+		# Prevent errors
+		if [[ ${#proxy} -lt 2 ]]; then
+			echo "${red}[ERROR] Invalid data for proxy!${end}"
+			exit 1
+		fi
+		
+		proxydata=${proxy:1:-1}
+		[[ $firstchar != "[" || $lastchar != "]" ]] && proxydata=""
+	else
+		read -p "${blu}URL address: ${end}" proxydata
+	fi
+	
+	if ! [[ -n $proxydata && $(is_url $proxydata) =~ ^(http|https|ip|true)$ ]]; then
+		echo "${red}[ERROR] Please, enter a valid host and port!${end}"
+		exit 1
+	elif [[ -f /etc/nginx/sites-available/$domain && -n $subfolder && $(is_subfolder $domain $subfolder) != "false" ]]; then
+		echo "${red}[ERROR] Subfolder${blu} $subfolder ${red}already exists!${end}"
+		exit 1
+	fi
+	
+	if [[ ( -z $subfolder || ( -n $subfolder && ! -f /etc/nginx/sites-available/$domain )) && $(is_empty_root_site $domain) == "false" ]]; then
+		create_empty_site
+	elif [[ -z $subfolder && $(is_empty_root_site $domain) == "true" ]]; then
+		echo "${gre}Subfolder configuration found: Main site at${blu} $domain ${gre}root has been successfully set as Reverse-Proxy!${end}"
+	fi
+	
+	is_url $proxydata -split
+	[[ -n $url_scheme ]] && url_scheme="$url_scheme://" || url_scheme="http://"
+	[[ -n $url_port ]] && url_port=":$url_port"
+	rpurl="$url_host$url_port$url_path"
+	[[ $(echo $rpurl | rev | cut -c-1) != "/" ]] && rpurl="${rpurl}/"
+	
+	sudo cp /opt/webinoly/templates/template-site-proxy /etc/nginx/apps.d/$domain$subname-proxy.conf
+	sudo sed -i "/# WebinolyCustom$/a \	include apps.d/$domain$subname-proxy.conf;" /etc/nginx/sites-available/$domain
+	[[ -n $subfolder ]] && sudo sed -i "/^location \/ {/c location $subfolder/ {" /etc/nginx/apps.d/$domain$subname-proxy.conf
+	sudo sed -i "s#http://localhost:8080/#${url_scheme}${rpurl}#g"  /etc/nginx/apps.d/$domain$subname-proxy.conf
+	
+	# Temporary FIX
+	sudo sed -i '/locations.conf;/s/^/#/' /etc/nginx/sites-available/$domain
+	
+	# Check host and port
+	local code=$(wget -t 1 --timeout=5 --server-response --spider $rpurl 2>&1 | awk '/^  HTTP/{print $2}')
+	code="${code##*$'\n'}"
+	[[ -n $code ]] && local mes="(Code: ${code})"
+	[[ $code =~ ^(2|3|4)[0-9][0-9]$ ]] || echo "${red}[WARNING] Seems like your Reverse Proxy host is not responding! ${mes}${end}"
+	
+	[[ -n $subfolder ]] && echo "${gre}Reverse proxy${blu} $subfolder ${gre}subfolder successfully created!${end}"
+}
+
+
+wp_cache() {
+	if [[ $cache == "off" && -f /etc/nginx/sites-available/$domain ]]; then
+		api-events_update si9
+		if [[ -n $subfolder && $(is_wp_cache $domain $subfolder) == "true" ]]; then
+			sudo sed -i "/apps.d\/$domain$subname-wpfc.conf;/c \	include apps.d/$domain$subname-php.conf;" /etc/nginx/sites-available/$domain
+			echo "${gre}FastCGI Cache in${blu} $domain$subfolder ${gre}has been disabled!${end}"
+		elif [[ $(is_wp_cache $domain) == "true" ]]; then
+			sudo sed -i '/common\/wpfc.conf/c \	include common/php.conf;' /etc/nginx/sites-available/$domain
+			echo "${gre}FastCGI Cache in${blu} $domain ${gre}has been disabled!${end}"
+		else
+			if [[ $(is_wp $domain $subfolder) == "false" ]]; then
+				echo "${red}[ERROR] Site${blu} $domain$subfolder ${red}is not a WP site!${end}"
+				exit 1
+			else
+				echo "${gre}FastCGI Cache is already disabled on your site${blu} $domain${end}"
+			fi
+		fi	
+	elif [[ $cache == "on" && -f /etc/nginx/sites-available/$domain ]]; then
+		api-events_update si8
+		if [[ $(is_wp $domain $subfolder) == "true" && $(is_wp_cache $domain $subfolder) == "false" ]]; then
+			[[ -z $subfolder ]] && sudo sed -i '/ common\/php.conf/c \	include common/wpfc.conf;' /etc/nginx/sites-available/$domain
+			[[ -n $subfolder ]] && sudo sed -i "/ apps.d\/$domain$subname-php.conf;/c \	include apps.d/$domain$subname-wpfc.conf;" /etc/nginx/sites-available/$domain
+			if [[ $(is_parked $domain) == "false" && ( ! -d /var/www/$domain/htdocs$subfolder/wp-content/plugins/nginx-helper || ! -d /var/www/$domain/htdocs$subfolder/wp-content/plugins/redis-cache ) ]]; then
+				if [[ -z $wp_cache_plugins ]]; then
+					echo "${gre}"
+					echo "We recommend Nginx Helper Plugin and Redis Object Cache Plugin as an easy way to manage FastCGI and Redis Cache on your WordPress site."
+					echo "${blu}Do you want to install it now [Y/n]? ${end}"
+					while read -r -n 1 -s answer; do
+					  answer=${answer:-y}
+					  if [[ $answer = [YyNn] ]]; then
+						[[ $answer = [Yy] ]] && wp_cache_plugins
+						break
+					  fi
+					done
+				elif [[ $wp_cache_plugins == "on" ]]; then
+					wp_cache_plugins
+				else
+					echo "${blu}WordPress Cache Plugins check bypassed! ${end}"
+				fi
+			fi
+			echo "${gre}"
+			echo "FastCGI Cache in${blu} $domain$subfolder ${gre}has been successfully enabled! "
+			echo "${end}"
+		else
+			if [[ $(is_wp $domain $subfolder) == "false" ]]; then
+				echo "${red}[ERROR] Site${blu} $domain$subfolder ${red}is not a WP site!${end}"
+				exit 1
+			else
+				echo "${gre}FastCGI Cache is already enabled on your site${blu} $domain$subfolder${end}"
+			fi
+		fi
+	else
+		echo "${red}[ERROR] Invalid value for cache! ${end}"
+		exit 1
+	fi
+}
+
+
+yoast_sitemap() {
+	if [[ ( -z $subfolder && $(is_wp $domain) == "false" ) || ( -n $subfolder && $(is_wp $domain $subfolder) == "false" ) ]]; then
+		echo "${red}[ERROR] Site${blu} $domain$subfolder ${red}is not a WP site!${end}"
+		exit 1
+	elif [[ -n $subfolder && $(is_wp $domain $subfolder) == "true" ]]; then
+		ystmap=$( grep -F "yoast-sitemap.conf;" /etc/nginx/apps.d/$domain$subname-php.conf )
+	else
+		ystmap=$( grep -F "yoast-sitemap.conf;" /etc/nginx/sites-available/$domain )
+	fi
+
+	if [[ $yoast_sitemap == "on" ]]; then
+		if [[ -z $ystmap ]]; then
+			if [[ -z $subfolder ]]; then
+				sudo sed -i "/# WebinolyCustom$/a \	include common/yoast-sitemap.conf;" /etc/nginx/sites-available/$domain
+			else
+				sudo sed -i "/\/index.php?q/a \	include apps.d\/$domain$subname-yoast-sitemap.conf;" /etc/nginx/apps.d/$domain$subname-php.conf
+				sudo sed -i "/\/index.php?q/a \	include apps.d\/$domain$subname-yoast-sitemap.conf;" /etc/nginx/apps.d/$domain$subname-wpfc.conf
+			fi
+			echo "${gre}Yoast Sitemap Support was successfully enabled!${end}"
+		else
+			echo "${gre}Yoast Sitemap Support is already enabled!${end}"
+		fi
+	elif [[ $yoast_sitemap == "off" ]]; then
+		if [[ -n $ystmap ]]; then
+			if [[ -z $subfolder ]]; then
+				sudo sed -i "/yoast-sitemap.conf;/d" /etc/nginx/sites-available/$domain
+			else
+				sudo sed -i "/yoast-sitemap.conf;/d" /etc/nginx/apps.d/$domain$subname-php.conf
+				sudo sed -i "/yoast-sitemap.conf;/d" /etc/nginx/apps.d/$domain$subname-wpfc.conf
+			fi
+			echo "${gre}Yoast Sitemap Support was successfully disabled!${end}"
+		else
+			echo "${gre}Yoast Sitemap Support is already disabled!${end}"
+		fi
+	else
+		echo "${red}[ERROR] Please, enter a valid option to enable/disable Yoast Sitemap Support!${end}"
+		exit 1
+	fi
+}
+
+
+clone_wp_site() {
+	if [[ $(is_wp_installed $clone_from $subfolder) != "true" ]]; then
+		echo "${dim}[INFO] WordPress is empty and still not configured in ${clone_from}${subfolder} site!${end}"
+	fi
+	if [[ -f /etc/nginx/sites-available/$domain && $overwrite == "on" ]]; then
+		echo "${blu}Site already exists! ${dim} Overwriting...${end}"
+		[[ -z $subfolder ]] && sudo site $domain -delete=force > /dev/null 2>&1 || sudo site $domain -subfolder=$subfolder -delete=force > /dev/null 2>&1
+	fi
+	
+	if [[ -n $subfolder ]]; then
+		sudo cp /etc/nginx/apps.d/$clone_from$subname-php.conf /etc/nginx/apps.d/$domain$subname-php.conf
+		sudo cp /etc/nginx/apps.d/$clone_from$subname-wpfc.conf /etc/nginx/apps.d/$domain$subname-wpfc.conf
+		sudo cp /etc/nginx/apps.d/$clone_from$subname-wpcommon.conf /etc/nginx/apps.d/$domain$subname-wpcommon.conf
+		sudo cp /etc/nginx/apps.d/$clone_from$subname-wpcommon-noauth.conf /etc/nginx/apps.d/$domain$subname-wpcommon-noauth.conf
+		sudo cp /etc/nginx/apps.d/$clone_from$subname-yoast-sitemap.conf /etc/nginx/apps.d/$domain$subname-yoast-sitemap.conf
+		
+		sudo sed -i "s/$clone_from/$domain/g" /etc/nginx/apps.d/$domain$subname-php.conf
+		sudo sed -i "s/$clone_from/$domain/g" /etc/nginx/apps.d/$domain$subname-wpfc.conf
+		
+		[[ ! -f /etc/nginx/sites-available/$domain ]] && create_empty_site
+		
+		local dest=$( echo $subfolder | rev | cut -f 2- -d "/" -s | rev )
+		sudo mkdir -p /var/www/$domain/htdocs$dest
+		sudo cp -r /var/www/$clone_from/htdocs$subfolder /var/www/$domain/htdocs$dest
+	else
+		sudo cp -r /var/www/$clone_from /var/www/$domain
+	fi
+
+	sudo chown -R www-data:www-data /var/www/$domain
+
+	if [[ -n $subfolder ]]; then
+		sudo sed -i "/# WebinolyCustom$/a \	include apps.d/$domain$subname-php.conf;" /etc/nginx/sites-available/$domain
+	elif [[ -z $subfolder && ! -f /etc/nginx/sites-available/$domain ]]; then
+		sudo cp /etc/nginx/sites-available/$clone_from /etc/nginx/sites-available/$domain
+		sudo ln -s /etc/nginx/sites-available/$domain /etc/nginx/sites-enabled/$domain
+		sudo sed -i "s/$clone_from/$domain/g"  /etc/nginx/sites-available/$domain
+		
+		# Fix server_name according to new domain/site.
+		[[ $subdomain == "true" ]] && local sername="server_name $domain;" || local sername="server_name $domain www.$domain;"
+		sudo sed -i "/server_name /c \	$sername" /etc/nginx/sites-available/$domain
+		
+		# Clone Subfolder conf files from apps.d
+		conf_write nginx-reload false
+		for appfile in /etc/nginx/apps.d/$clone_from*.conf
+		do
+			if [[ -s $appfile ]]; then
+				local newfile=$(echo $appfile | sed "s/$clone_from/$domain/")
+				sudo cp $appfile $newfile
+				
+				# Check if site contains WP in subfolders.
+				if [[ $appfile == "/etc/nginx/apps.d/$domain_"*-wpcommon.conf ]]; then
+					local wpsub="/$(echo $appfile | cut -f 2- -d "_" -s | cut -f -1 -d "-" -s | sed "s/_/\//g")"
+					if [[ -n $wpsub && -f /var/www/$domain/htdocs$wpsub/wp-config.php ]]; then
+						echo "${gre}${dim}WordPress installed in a subfolder${blu} '${wpsub}' ${gre}was found, we will clone it too...${end}"
+						# Silenced because some times files are still not all copied and this commands reload nginx causing unexpected errors.
+						# At the end when all the files are copied everything is fine and nothing to worry!
+						sudo site $domain -subfolder=$wpsub -delete=keep-db > /dev/null 2>&1
+						sudo site $domain -clone-from=$clone_from -subfolder=$wpsub > /dev/null 2>&1
+						[[ -n $env ]] && sudo site $domain -env=$env -subfolder=$wpsub > /dev/null 2>&1
+					fi
+				fi
+			fi
+		done
+		
+	else
+		echo "${red}[ERROR] Unexpected error, site you're trying to clone already exists!${end}"
+		exit 1
+	fi
+
+	local dom=$(echo $domain$subfolder | sed "s/[^0-9A-Za-z]/_/g")
+	local AUTOGENPASS_WPDB=`pwgen -s -1 16`
+	
+	wp_config_write $domain DB_NAME \'$dom\' $subfolder
+	wp_config_write $domain DB_USER \'$dom\' $subfolder
+	wp_config_write $domain DB_PASSWORD \'$AUTOGENPASS_WPDB\' $subfolder
+	wp_config_write $domain WP_CACHE_KEY_SALT \'wp_$domain$(echo $subfolder | sed "s/\//_/g")\' $subfolder
+	
+	if [[ $wp_dbhost == "localhost" ]]; then
+		site -mysql=[localhost,$dom,$dom,$AUTOGENPASS_WPDB] > /dev/null 2>&1
+		mysqldump -u admin -p$ADMIN_PASS $wp_dbname | mysql -u admin -p$ADMIN_PASS $dom
+		edit_wp_db_url $domain "http://${domain}${subfolder}" $subfolder
+	else
+		site -mysql=[$wp_dbhost,$dom,$dom,$AUTOGENPASS_WPDB,$extdb_user,$extdb_pass] > /dev/null 2>&1
+		mysqldump -h "$extdb_url" -P "$extdb_port" -u"$extdb_user" -p"$extdb_pass" $wp_dbname | mysql -h "$extdb_url" -P "$extdb_port" -u"$extdb_user" -p"$extdb_pass" $dom
+		edit_wp_db_url $domain "http://${domain}${subfolder}" $subfolder
+	fi
+	
+	# Remove custom settings from cloned site
+	sudo site $domain -subdomain=false -force-redirect=off > /dev/null 2>&1
+	[[ $(is_ssl $clone_from) == "true" ]] && revoke="off" && site_ssl_off > /dev/null 2>&1
+	[[ $(conf_read default-site) == $clone_from ]] && remove_nginx_default_server $domain
+	conf_delete nginx-reload
+	
+	if [[ $replace_content != "off" ]]; then
+		replace_content="[http://$clone_from,http://$domain]" && wp_replace_content > /dev/null 2>&1
+		replace_content="[https://$clone_from,https://$domain]" && wp_replace_content > /dev/null 2>&1
+		# In case www is forced
+		replace_content="[http://www.$clone_from,http://$domain]" && wp_replace_content > /dev/null 2>&1
+		replace_content="[https://www.$clone_from,https://$domain]" && wp_replace_content > /dev/null 2>&1
+	fi
+	
+	echo "${gre}Site${blu} $domain$subfolder ${gre}is now a successfull clone of${blu} $clone_from$subfolder ${end}"
+	[[ -n $env && -z $subfolder ]] && sudo site $domain -env=$env
+	[[ -n $env && -n $subfolder ]] && sudo site $domain -env=$env -subfolder=$subfolder
+}
+
+
+wp_replace_content() {
+	if [[ $replace_content == true ]]; then
+		echo ""
+		read -p "${blu}Search: ${end}" search
+		read -p "${blu}Replace with: ${end}" replace
+		echo ""
+	elif [[ $(echo "${replace_content}" | cut -c-1) == "[" && $(echo "${replace_content}" | rev | cut -c-1) == "]" ]]; then
+		# Prevent errors
+		if [[ ${#replace_content} -lt 2 ]]; then
+			echo "${red}[ERROR] Invalid data for Replace-Content!${end}"
+			exit 1
+		fi
+		
+		userdata=${replace_content:1:-1}
+		search=$(echo "${userdata}" | cut -d',' -f 1 -s)
+		replace=$(echo "${userdata}" | cut -d',' -f 2 -s)
+	fi
+	
+	if [[ -z $search || -z $replace ]]; then
+		echo "${red}[ERROR] Please, enter a valid value for search and replace!${end}"
+		exit 1
+	fi
+	
+	wp_conf_retrieve $domain $subfolder
+	if [[ ( $wp_dbhost == "localhost" && $(check_mysql_connection localhost) != "true" ) || ( $wp_dbhost != "localhost" && $(check_mysql_connection $extdb_url $extdb_port $extdb_user $extdb_pass) != "true" ) ]]; then
+		exit 1
+	fi
+	
+	query="USE $wp_dbname; UPDATE ${wp_dbpref}posts SET post_content = REPLACE (post_content,'$search','$replace'); FLUSH PRIVILEGES;"
+	
+	if [[ $wp_dbhost == "localhost" ]]; then
+		sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS -e "$query"
+	else
+		sudo mysql --connect-timeout=10 -h "$extdb_url" -P "$extdb_port" -u"$extdb_user" -p"$extdb_pass" -e "$query"
+	fi
+	echo "${gre}Content successfully replaced in your WP site!${end}"
+}
+
+
+list_sites() {
+	echo ""
+	
+	if ! [[ ${list,,} =~ ^(true|disabled|main|parked|wordpress|php|html|proxy|forward|tools|default|ssl|nossl|sslstaging|accesslog|noaccesslog|cache|nocache|adminauth|noadminauth|debug|nodebug|wpenv)$ ]]; then
+		echo "${red}[ERROR] Invalid value for list filter! ${end}"
+		exit 1
+	fi
+	
+	for site in "/etc/nginx/sites-available"/*
+	do
+		local domi=$(echo $site | cut -f 5 -d "/")
+		[[ $domi == "default" || $domi == $(conf_read tools-port) || $domi == *".dpkg-"* ]] && continue
+		
+		if [[ $list != "true" ]]; then
+			[[ ${list,,} == "disabled" && -L /etc/nginx/sites-enabled/$domi ]] && continue
+			[[ ${list,,} == "main" && ( ! -L /etc/nginx/sites-enabled/$domi || ! -d /var/www/$domi ) ]] && continue
+			
+			[[ ${list,,} == "parked" && $(is_parked $domi) != "true" ]] && continue
+			[[ ${list,,} == "wordpress" && $(is_wp $domi) != "true" ]] && continue
+			[[ ${list,,} == "php" && $(is_php $domi) != "true" ]] && continue
+			[[ ${list,,} == "html" && $(is_html $domi) != "true" ]] && continue
+			[[ ${list,,} == "proxy" && $(is_proxy $domi) != "true" ]] && continue
+			[[ ${list,,} == "forward" && $(is_forward $domi) != "true" ]] && continue
+			
+			[[ ${list,,} == "tools" && $(conf_read tools-site) != $domi ]] && continue
+			[[ ${list,,} == "default" && $(conf_read default-site) != $domi ]] && continue
+			
+			[[ ${list,,} == "ssl" && $(is_ssl $domi) != "true" ]] && continue
+			[[ ${list,,} == "nossl" && $(is_ssl $domi) == "true" ]] && continue
+			[[ ${list,,} == "sslstaging" && ( $(is_ssl $domi) != "true" || $(is_ssl_staging $domi) != "true") ]] && continue
+			
+			[[ ${list,,} == "accesslog" && $(is_log $domi) != "true" ]] && continue
+			[[ ${list,,} == "noaccesslog" && $(is_log $domi) == "true" ]] && continue
+			
+			# Only WordPress options
+			[[ ${list,,} =~ ^(cache|nocache|adminauth|noadminauth|debug|nodebug|wpenv)$ && $(is_wp $domi) != "true" ]] && continue
+			
+			[[ ${list,,} == "cache" && $(is_wp_cache $domi) != "true" ]] && continue
+			[[ ${list,,} == "nocache" && $(is_wp_cache $domi) == "true" ]] && continue
+			
+			[[ ${list,,} == "adminauth" && $(is_wp_auth $domi) != "true" ]] && continue
+			[[ ${list,,} == "noadminauth" && $(is_wp_auth $domi) == "true" ]] && continue
+			
+			[[ ${list,,} == "debug" && $(is_wp_debug $domi) != "true" ]] && continue
+			[[ ${list,,} == "nodebug" && $(is_wp_debug $domi) == "true" ]] && continue
+			
+			[[ ${list,,} == "wpenv" && -z $(wp_config_read $domi WP_ENVIRONMENT_TYPE) ]] && continue
+		fi
+		
+		if [[ -z $raw && $list != "raw" ]]; then
+			[[ -d /var/www/$domi ]] && local sign="${gre} +" || local sign="${blu} *${gre}"
+			[[ ! -L /etc/nginx/sites-enabled/$domi ]] && local sign="${red} -"
+			
+			[[ $(is_wp $domi) == "true" && -n $(wp_config_read $domi WP_ENVIRONMENT_TYPE) ]] && local sype="$(site_type $domi):$(wp_config_read $domi WP_ENVIRONMENT_TYPE)" || local sype=$(site_type $domi)
+			
+			[[ $(conf_read default-site) == $domi ]] && local check="${blu}${dim}($sype)(Default)" || local check="${blu}${dim}($sype)"
+			[[ $(conf_read tools-site) == $domi ]] && local check="${check}(Tools)"
+			[[ $(is_ssl $domi) != "true" ]] && local check="${check}${red}(NoSSL)" || local check="${check}${red}"
+			[[ $(is_ssl $domi) == "true" && $(is_ssl_staging $domi) == "true" ]] && local check="${check}(SSL-Staging)"
+			[[ $(is_log $domi) == "true" ]] && local check="${check}(AccessLog)"
+			
+			if [[ $(is_wp $domi) == "true" ]]; then
+				[[ $(is_wp_cache $domi) != "true" ]] && local check="${check}(NoCache)"
+				[[ $(is_wp_auth $domi) != "true" ]] && local check="${check}(NoAdminAuth)"
+				[[ $(is_wp_debug $domi) == "true" ]] && local check="${check}(Debug)"
+			fi
+			
+			local outlist="$sign $domi $check ${end}"
+		elif [[ $list == "raw" || $raw =~ ^(all|parked|disabled|main|true)$ ]]; then
+			local outlist="$domi"
+		elif [[ -n $raw ]]; then
+			echo "${red}[ERROR] Please, enter a valid value for RAW!${end}"
+			exit 1
+		fi
+		
+		if [[ -n $outlist ]]; then
+			echo "$outlist"
+			local nonemptylist=true
+			local count=$(($count+1))
+		fi
+	done
+	[[ -z $nonemptylist && -z $raw && $list != "raw" ]] && echo "${blu}[Empty] No sites were found!${end}" || echo -e "\n${blu}Found:${end} $count sites"
+	echo ""
+}
+
+
+site_info() {
+	local typesite=$(site_type $domain)
+	if [[ $typesite == "false" ]]; then
+		echo "${red}[ERROR] Unrecognized site! ${end}"
+		exit 1
+	fi
+	
+	[[ -L /etc/nginx/sites-enabled/$domain ]] && local status="Enabled" || local status="Disabled"
+	
+	echo ""
+	echo "${blu}Type:${end} $typesite"
+	echo "${blu}Status:${end} $status"
+	
+	if [[ $typesite != "Forward" ]]; then
+		if [[ $(is_ssl $domain) == "true" && $(is_ssl_le $domain) == "true" && $(is_ssl_staging $domain) != "true" ]]; then
+			local ssl="Let's Encrypt"
+		elif [[ $(is_ssl $domain) == "true" && $(is_ssl_le $domain) == "true" && $(is_ssl_staging $domain) == "true" ]]; then
+			local ssl="Let's Encrypt (Staging)"
+		elif [[ $(is_ssl $domain) == "true" && $(is_ssl_le $domain) != "true" ]]; then
+			local ssl="Custom"
+		else
+			local ssl="false"
+		fi
+		
+		echo "${blu}SSL:${end} $ssl"
+		echo "${blu}Access Logs:${end} $(is_log $domain)"
+		echo "${blu}Force Redirect:${end} $(is_force_redirect $domain)"
+	fi
+	
+	[[ $typesite =~ ^(Forward|Parked|Reverse Proxy) ]] || echo "${blu}Size:${end} $(sudo du -sh /var/www/$domain | cut -d"/" -f 1 -s)"
+	
+	if [[ $typesite == "WordPress" ]]; then
+		echo ""
+		echo "${blu}Cache:${end} $(is_wp_cache $domain)"
+		echo "${blu}Multisite:${end} $(is_wp_multisite $domain)"
+		echo "${blu}WP Auth:${end} $(is_wp_auth $domain)"
+		echo "${blu}Debug:${end} $(is_wp_debug $domain)"
+	
+		[[ -n $(wp_config_read $domain WP_ENVIRONMENT_TYPE $subfolder) ]] && echo "${blu}Environment:${end} $(wp_config_read $domain WP_ENVIRONMENT_TYPE $subfolder)"
+		echo ""
+		
+		wp_conf_retrieve $domain
+		echo "${blu}Database:${end} $wp_dbhost"
+		echo "${blu}DB Name:${end} $wp_dbname"
+		echo "${blu}DB User:${end} $wp_dbuser"
+		echo "${blu}DB Prefix:${end} $wp_dbpref"
+	fi
+	
+	if [[ $typesite == "Reverse Proxy" ]]; then
+		echo "${blu}Source Server:${end} $(grep "proxy_pass " /etc/nginx/apps.d/$domain-proxy.conf | cut -d " " -f 2 -s | rev | cut -c 2- | rev)"
+	elif [[ $typesite == "Parked" ]]; then
+		echo "${blu}Main Site:${end} $(grep "root " /etc/nginx/sites-available/$domain | cut -d "/" -f 4 -s)"
+	elif [[ $typesite == "Forward" ]]; then
+		echo "${blu}Forwarded to:${end} $(grep "return 301 " /etc/nginx/sites-available/$domain | cut -d " " -f 3 -s | cut -d "$" -f 1 -s)"
+	fi
+	echo ""
+}
+
+
+wp_env_type() {
+	if [[ $(is_wp $domain $subfolder) != "true" ]]; then
+		echo "${red}[ERROR] Site${blu} $domain ${red}is not a WordPress site!${end}"
+		exit 1
+	elif [[ $(is_parked $domain) == "true" ]]; then
+		echo "${red}[ERROR] Parked sites not allowed! ${dim}(Env type should be changed in main site)${end}"
+		exit 1
+	elif ! [[ $env =~ ^(production|staging|development|local)$ ]]; then
+		echo "${red}[ERROR] Invalid value for WP environment type!${end}"
+		exit 1
+	fi
+	
+	if [[ $env == "production" ]]; then
+		local index="1"
+		wp_config_delete $domain WP_ENVIRONMENT_TYPE $subfolder
+		[[ -n $cache ]] && wp_cache
+	else
+		local index="0"
+		wp_config_write $domain WP_ENVIRONMENT_TYPE \'$env\' $subfolder
+		if [[ -n $cache ]]; then
+			wp_cache
+		elif [[ $(is_wp_cache $domain $subfolder) == "true" ]]; then
+			cache="off"
+			wp_cache
+		fi
+	fi
+	
+	# Not change WP debug when invoked from LOG command
+	if [[ -z $skip_debug ]]; then
+		if [[ $env =~ ^(production|staging)$ && $(is_wp_debug $domain $subfolder) == "true" ]]; then
+			[[ -z $subfolder ]] && log $domain -wp=off || log $domain -wp=off -subfolder=$subfolder
+		elif [[ $env =~ ^(development|local)$ && $(is_wp_debug $domain $subfolder) != "true" ]]; then
+			[[ -z $subfolder ]] && log $domain -wp=on || log $domain -wp=on -subfolder=$subfolder
+		fi
+	fi
+	
+	# WordPress Reading Settings: Discourage Search Engines
+	wp_conf_retrieve $domain $subfolder
+	
+	if [[ $(is_wp_installed $domain $subfolder) == "true" ]]; then
+		if [[ $wp_dbhost == "localhost" && $(check_mysql_connection localhost) == "true" ]]; then
+			sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS <<_EOF_
+USE $wp_dbname;
+UPDATE ${wp_dbpref}options SET option_value='$index' WHERE option_name='blog_public';
+FLUSH PRIVILEGES;
+_EOF_
+		
+		elif [[ $(check_mysql_connection $extdb_url $extdb_port $extdb_user $extdb_pass) == "true" ]]; then
+			sudo mysql --connect-timeout=10 -h "$extdb_url" -P "$extdb_port" -u"$extdb_user" -p"$extdb_pass" <<_EOF_
+USE $wp_dbname;
+UPDATE ${wp_dbpref}options SET option_value='$index' WHERE option_name='blog_public';
+FLUSH PRIVILEGES;
+_EOF_
+		
+		else
+			local index=""
+		fi
+		
+		[[ $index == "0" ]] && echo "${gre}Discourage Search Engines WP option has been enabled for${blu} $domain$subfolder ${gre}site!${end}"
+		[[ $index == "1" ]] && echo "${gre}Discourage Search Engines WP option has been disabled for${blu} $domain$subfolder ${gre}site!${end}"
+	fi
+	
+	echo "${gre}WordPress Environment Type has been set successfully!${end}"
+}
+

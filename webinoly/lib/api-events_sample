@@ -1,0 +1,12 @@
+#!/bin/bash
+
+# Internal API or Events
+# Docs: https://webinoly.com/en/internal-api-events/
+
+# Description: Execute actions at certain points or events, for example at the end of the "stack" command each time is executed 
+# or after Nginx is installed. Just rename this file to "api-events" and check for the complete list of status codes in the documentation.
+
+# Just put all your code inside this function:
+api-events_catch_status() {
+	echo "${blu}API Status: $1 ${end}"
+}

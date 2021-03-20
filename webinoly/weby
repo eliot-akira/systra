@@ -1,0 +1,191 @@
+#!/bin/bash
+# Webinoly Installation Script.
+
+# Check OS support
+distr=`echo $(lsb_release -i | cut -d':' -f 2)`
+osver=`echo $(lsb_release -c | cut -d':' -f 2)`
+if ! [[ $distr == "Ubuntu" && $osver =~ ^(bionic|focal)$ ]]; then
+	echo "$(tput setaf 1)"
+	echo "****************************************************************************"
+	echo "****  This OS is not supported by Webinoly and could not work properly  ****"
+	echo "****************************************************************************"
+	echo "$(tput sgr0)"
+	read -p "Press [Enter] key to Continue or [Ctrl+C] to Cancel..."
+fi
+
+# Check for sudo/root privileges
+if [[ $(whoami) != "root" ]]; then
+	echo "$(tput setaf 1)Please run this script as root or using sudo.$(tput sgr0)"
+	sudo rm weby
+	exit 1
+fi
+
+# Prevent "compulsive" re-installation, force the use of the 'update' command.
+if [[ -f /opt/webinoly/webinoly.conf && $1 != "upd" && $2 != "-ver=alpha" ]]; then
+	echo "$(tput setaf 2)Webinoly is already installed on your server!"
+	echo "$(tput setaf 6)To update use the proper command.$(tput sgr0)"
+	sudo rm weby
+	exit 0
+elif [[ ! -f /opt/webinoly/webinoly.conf && $1 == "upd" ]]; then
+	echo "$(tput setaf 1)Webinoly cannot be updated because it's not installed or not found.$(tput sgr0)"
+	sudo rm weby
+	exit 0
+fi
+
+# Diplay menu to select type of server
+if [[ $1 == "upd" ]]; then
+	setup=0
+	update="&update=true"
+elif ! [[ $1 -ge 0 && $1 -le 3 && $1 =~ ^[0-9]+$ ]]; then
+	echo "$(tput setaf 6)"
+	echo "  1 - HTML Server"
+	echo "  2 - PHP Server"
+	echo "  3 - LEMP Server (Default)"
+	echo "  0 - Maybe later..."
+	echo ""
+	read -p "$(tput setaf 2)Select the desired option to configure your server: $(tput sgr0)" setup
+	echo ""
+	setup=${setup:-3}
+else
+	setup=$1
+fi
+
+
+# Download and install Webinoly
+if [[ $2 == "-ver="* ]]; then
+	ver=$(echo "$2" | cut -d'=' -f 2 -s)
+	# Skip stadistics counters for dev and testing (custom version stats).
+	if [[ $(echo $ver | rev | cut -c-1) == "*" || $ver == "alpha" ]]; then
+		ver=${ver//'*'}
+		statskip="true"
+	fi
+	
+	# Be sure we have a valid server response for the requested version
+	code=$(wget --server-response --spider https://qrok.es/webinoly?version=$ver 2>&1 | awk '/^  HTTP/{print $2}')
+	code="${code##*$'\n'}" # Get the last code (redirections)
+
+	if [[ $code == 200 ]]; then
+		sudo wget --timeout=15 -t 1 -qrO $HOME/webinoly.tar https://qrok.es/webinoly?version=$ver
+		[[ $ver == "beta" ]] && echo "$(tput setaf 1)[WARNING] You are installing a BETA version of Webinoly and it's not recommended for production enviroments.$(tput sgr0)"
+	else
+		echo "$(tput setaf 1)[ERROR] Version not found or not available! ($code) $(tput sgr0)"
+		sudo rm weby
+		exit 1
+	fi
+else
+	sudo wget --timeout=15 -t 1 --referer="https://webinoly.com/?option=${setup}${update}" -qrO $HOME/webinoly.tar https://qrok.es/wytar
+fi
+
+if [[ ! -s $HOME/webinoly.tar ]]; then
+	echo "$(tput setaf 1)[ERROR] Downloading Webinoly failed!$(tput sgr0)"
+	sudo rm weby
+	exit 1
+else
+	echo "$(tput dim)Downloading... Successful!"
+	echo "$(tput sgr0)"
+fi
+		
+sudo mkdir -p /opt/webinoly
+sudo tar -xf $HOME/webinoly.tar -C /opt/webinoly
+sudo mkdir -p /opt/webinoly/templates/source
+sudo find /opt/webinoly -type d -exec chmod 755 {} \;
+sudo find /opt/webinoly -type f -exec chmod 644 {} \;
+sudo chmod -f 744 /opt/webinoly/lib/ex-*
+
+sudo chmod 755 /opt/webinoly/plugins/*
+sudo mv /opt/webinoly/plugins/* /usr/bin/
+
+source /opt/webinoly/lib/general
+
+# Check for uninstalled Webinoly conf file
+if [[ -f $HOME/.webinoly-conf-restore_dont-remove ]]; then
+	echo "${gre}Seems like Webinoly was installed previously, we will try to recover your old configuration!${end}"
+	sudo tar -Pxf $HOME/.webinoly-conf-restore_dont-remove -C /
+	sudo rm -rf $HOME/.webinoly-conf-restore_dont-remove
+	sudo webinoly -verify
+	if [[ $? != 0 ]]; then
+		sudo rm weby
+		app_purge
+		exit 1
+	fi
+fi
+
+
+# Check if new installation
+if [[ -f /opt/webinoly/webinoly.conf ]]; then
+	oldapp=$(conf_read app-version)
+	oldver=$(conf_read server-version)
+	newver=$svr_version
+	echo "${gre}Webinoly Configuration file was found, so we will use it!${end}"
+else
+	new_install="true"
+fi
+
+
+# Write app version
+webyversion=$app_version
+conf_write app-version $webyversion
+[[ $ver =~ ^(alpha|beta)$ ]] && conf_write branch $ver
+
+
+# Ping to Webinoly Stats
+if [[ $statskip != "true" ]]; then
+	opt=$setup
+	branch="Public"
+
+	if [[ $new_install == "true" ]]; then
+		type="New"
+	elif [[ $ver == "beta" ]]; then
+		type="Beta"
+	elif [[ -n $update && $ver =~ ^[0-9]{1}\.[0-9]{1,2}\.[0-9]{1,2}$ ]]; then
+		type="Downgrade"
+		webyversion=$(wget --timeout=10 -t 1 -qO- https://api.webinoly.com/check?text=true)
+		opt=$ver
+	elif [[ -n $setup && $ver =~ ^[0-9]{1}\.[0-9]{1,2}\.[0-9]{1,2}$ ]]; then
+		type="Custom"
+		webyversion=$(wget --timeout=10 -t 1 -qO- https://api.webinoly.com/check?text=true)
+		opt=$ver
+	elif [[ -n $update && -n $oldapp ]]; then
+		type="Updates"
+		opt=$oldapp
+	else
+		type="Error"
+		echo "${red}[WARNING] Installation method not recognized!${end}"
+	fi
+
+	wget https://api.webinoly.com/stats/?install=${branch}:${webyversion}:${type}:${opt} --referer="Webinoly-Internal-Verified-Stats" --spider --timeout=15 -t 1 -q
+fi
+
+
+# Stack installation & updates
+[[ -n $oldver && ${newver//.} -gt ${oldver//.} ]] && source /opt/webinoly/lib/update
+[[ $setup -gt 0 && $setup -le 3 ]] && stack -nginx
+[[ $setup -gt 1 && $setup -le 3 ]] && stack -php
+[[ $setup == 3 ]] && stack -mysql
+
+
+# Message Center
+if [[ $new_install == "true" && $setup == 0 ]]; then
+	echo "${blu}You have chosen the option '0', it means that you have to manually build your own stack."
+	echo "But, don't worry! With Webinoly this is an easy task, just use the stack command, i.e. 'sudo stack -lemp'"
+	echo "${gre}"
+	echo "Webinoly has been successfully installed!!!"
+fi
+
+echo "${blu}"
+echo "****************************************************************************"
+echo "************************${bol}     D O N A T I O N S     ${end}${blu}*************************"
+echo "***   ${dim}If you like Webinoly, buy me a coffee or a beer to show support.${end}${blu}   ***"
+echo "****************************************************************************"
+echo "*************     Bitcoin: 1E3Ybo5UcvaAr1MoK4nBnMRFFY9aEMiku3     **********"
+echo "*******   GitHub Sponsors: https://github.com/sponsors/QROkes     **********"
+echo "***************    PayPal: https://www.paypal.me/qrokes     ****************"
+echo "****************************************************************************"
+echo "***   ${dim}Your regular donations is what keep this project moving forward.${end}${blu}   ***"
+echo "****************************************************************************"
+echo "${end}"
+
+
+# Remove Installation File
+sudo rm weby
+app_purge

@@ -1,0 +1,931 @@
+#!/bin/bash
+
+# Don't remove dumb re-check!
+# Prevent 'tput' errors when running from Cron
+[[ -z $TERM || $TERM == "unknown" || $TERM == "dumb" ]] && export TERM=dumb
+
+readonly app_version="1.13.2"
+readonly svr_version="1.5"
+readonly os_ubuntu_supported=(bionic focal)
+readonly php_supported=(7.2 7.3 7.4 8.0)
+readonly datadog_agent_ver="7"
+
+# echo colors
+readonly red=`tput setaf 1`
+readonly gre=`tput setaf 2`
+readonly blu=`tput setaf 6`
+readonly end=`tput sgr0`
+readonly bol=`tput bold`
+readonly dim=`tput dim`
+
+
+# STOP and exit if not root or sudo.
+if [[ $(whoami) != "root" ]]; then
+	echo "${red}Please run this script as root or using sudo.${end}"
+	exit 1
+fi
+
+
+# ***********************************************
+# Configuration Management Functions   **********
+# ***********************************************
+
+conf_read() {
+	if [[ ! -f /opt/webinoly/webinoly.conf ]]; then
+		echo "${red}[ERROR] Config file not found!${end}"
+		exit 1
+	fi
+	
+	local val=$(grep -w "^${1}:.*" /opt/webinoly/webinoly.conf | cut -f 2 -d ':')
+	echo $val
+}
+
+conf_delete() {
+	if [[ ! -f /opt/webinoly/webinoly.conf ]]; then
+		echo "${red}[ERROR] Config file not found!${end}"
+		exit 1
+	fi
+	
+	sed -i "/^${1}:/d" /opt/webinoly/webinoly.conf
+}
+
+conf_write() {
+	[[ ! -f /opt/webinoly/webinoly.conf ]] && sudo touch /opt/webinoly/webinoly.conf
+	conf_delete $1
+	echo "$1:$2" >> /opt/webinoly/webinoly.conf
+}
+
+
+# ***********************************************
+# Useful variables   ****************************
+# ***********************************************
+readonly ADMIN_PASS=$( echo $(conf_read mysql-admin) | openssl enc -d -a -salt )
+
+
+
+
+# ***********************************************
+# General Functions   ***************************
+# ***********************************************
+
+
+check_ubuntu_release() {
+	local check="false"
+	for val in "${os_ubuntu_supported[@]}"
+	do 
+		[[ $val == $(lsb_release -c | cut -d':' -f 2 | xargs) ]] && check="true"
+	done
+	echo $check
+}
+check_php_version() {
+	local check="false"
+	for val in "${php_supported[@]}"
+	do 
+		[[ $val == $1 ]] && check="true"
+	done
+	echo $check
+}
+
+check_osname() {
+	if ! [[ $(lsb_release -i | cut -d':' -f 2 | xargs) == "Ubuntu" && $(check_ubuntu_release) == "true" ]]; then
+		echo "${red}" >&2
+		echo "****************************************************************************" >&2
+		echo "****  This OS is not supported by Webinoly and could not work properly  ****" >&2
+		echo "****************************************************************************" >&2
+		echo "${end}" >&2
+	else
+		echo $(lsb_release -c | cut -d':' -f 2 | xargs)
+	fi
+}
+
+
+check_for_nginx() {
+	if [[ $(conf_read nginx) != "true" && $1 == "-ask" ]]; then
+		echo "${red}"
+		echo "+ NGINX Not Found!"
+		echo "${blu}Do you want to install it now? [y/N]? ${end}"
+		while read -r -n 1 -s answer; do
+			answer=${answer:-n}
+			echo ""
+			[[ $answer = [YyNn] ]] && break
+		done
+		
+		[[ $answer == [Yy] ]] && sudo stack -nginx
+	fi
+	
+	if [[ $(conf_read nginx) != "true" ]]; then
+		echo "${red}[ERROR] NGINX is required and not found! ${end}"
+		exit 1
+	fi
+}
+check_for_nginx_tool() {
+	if [[ $(conf_read nginx) != "true"  || $(conf_read nginx-optim) != "true" || $(conf_read nginx-tool) != "true" ]]; then
+		echo "${red}[ERROR] NGINX Tools are required and not found! ${end}"
+		exit 1
+	fi
+}
+check_for_php() {
+	if [[ $(conf_read php) != "true" && $1 == "-ask" ]]; then
+		echo "${red}"
+		echo "+ PHP Not Found!"
+		echo "${blu}Do you want to install it now? [y/N]? ${end}"
+		while read -r -n 1 -s answer; do
+			answer=${answer:-n}
+			echo ""
+			[[ $answer = [YyNn] ]] && break
+		done
+		
+		[[ $answer == [Yy] ]] && sudo stack -php
+	fi
+	
+	if [[ $(conf_read php) != "true" ]]; then
+		echo "${red}[ERROR] PHP is required and not found! ${end}"
+		exit 1
+	fi
+}
+check_for_php_tool() {
+	if [[ $(conf_read php) != "true"  || $(conf_read php-optim) != "true" || $(conf_read php-tool) != "true" ]]; then
+		echo "${red}[ERROR] PHP Tools are required and not found! ${end}"
+		exit 1
+	fi
+}
+check_for_mysql() {
+	if [[ $(conf_read mysql) != "true" && $1 == "-ask" ]]; then
+		echo "${red}"
+		echo "+ MySQL Not Found!"
+		echo "${blu}Do you want to install it now? [y/N]? ${end}"
+		while read -r -n 1 -s answer; do
+			answer=${answer:-n}
+			echo ""
+			[[ $answer = [YyNn] ]] && break
+		done
+		
+		[[ $answer == [Yy] ]] && sudo stack -mysql
+	fi
+	
+	if [[ $(conf_read mysql) != "true" ]]; then
+		echo "${red}[ERROR] MySQL is required and not found! ${end}"
+		exit 1
+	fi
+}
+check_for_mysql_client() {
+	if [[ $(conf_read mysql-client) != "true" ]]; then
+		echo "${gre}MySQL Client is not installed and we need it to stablish a connection with your external server.${end}"
+		echo "${dim}Wait while we install MySQL Client...${end}"
+		mysql_client_install > /dev/null 2>&1 &
+		wait $!
+		echo "${gre}MySQL Client has been successfully installed!${end}"
+	fi
+}
+
+
+check_mysql_connection() {
+	if [[ -n $1 && -n $2 && -n $3 && -n $4 && $(conf_read mysql-client) == "true"  ]]; then
+		sudo mysql --connect-timeout=10 -h "$1" -P "$2" -u"$3" -p"$4" -e "quit"
+		if [[ $? != "0" ]]; then
+			echo "${red}============================================" >&2
+			echo "    [Error]  Database conection failed." >&2
+			echo "============================================${end}" >&2
+			echo "" >&2
+			echo "false"
+		else
+			echo "true"
+		fi
+	elif [[ ${1,,} == "localhost" && $(conf_read mysql) == "true" ]]; then
+		# In case of custom DB user
+		if [[ -n $2 && -n $3 ]]; then
+			local dbu=$2
+			local dbp=$3
+		else
+			local dbu="admin"
+			local dbp=$ADMIN_PASS
+		fi
+		
+		sudo mysql --connect-timeout=10 --user=$dbu -p$dbp -e "quit"
+		if [[ $? != "0" ]]; then
+			echo "${red}============================================" >&2
+			echo "    [Error]  Database conection failed." >&2
+			echo "============================================${end}" >&2
+			echo "" >&2
+			echo "false"
+		else
+			echo "true"
+		fi
+	else
+		echo "${red}============================================" >&2
+		echo "    [Error]  Database conection failed." >&2
+		echo "============================================${end}" >&2
+		echo "" >&2
+		echo "false"
+	fi
+}
+
+
+check_external_db_saved() {
+	if [[ -n $(conf_read external-dbh) && -n $(conf_read external-dbu) && -n $(conf_read external-dbp) && -n $(conf_read external-dbx) ]]; then
+		external_db="[$(conf_read external-dbu),$( echo $(conf_read external-dbp) | openssl enc -d -a -salt ),$(conf_read external-dbh):$(conf_read external-dbx)]"
+		[[ $(conf_read quiet) != "true" ]] && echo "${blu}${dim}External DB credentials found!${end}" >&2
+	fi
+}
+
+
+external_db_parse() {
+	if [[ -n $external_db ]]; then
+		# Prevent errors
+		if [[ ${#external_db} -lt 2 ]]; then
+			echo "${red}[ERROR] Invalid data for External Database!${end}"
+			exit 1
+		fi
+		
+		local dbdata=${external_db:1:-1}
+		local user=$(echo "${dbdata}" | cut -d',' -f 1 -s)
+		local pass=$(echo "${dbdata}" | cut -d',' -f 2 -s)
+		local host=$(echo "${dbdata}" | cut -d',' -f 3 -s)
+		local url=$(echo "$host" | cut -f 1 -d ':')
+		local port=$(echo "$host" | cut -f 2 -d ':' -s)
+		
+		if [[ $(echo "${external_db}" | cut -c-1) != "[" || $(echo "${external_db}" | rev | cut -c-1) != "]" ]]; then
+			echo "${red}[ERROR] Invalid syntax for External Database!${end}"
+			exit 1
+		elif [[ $1 == "-nohost" && ( -z $user || -z $pass ) ]]; then
+			echo "${red}[ERROR] Invalid data for External Database!${end}"
+			exit 1
+		elif [[ $1 != "-nohost" && ( -z $user || -z $pass || -z $url || -z $port ) ]]; then
+			echo "${red}[ERROR] Invalid data for External Database!${end}"
+			exit 1
+		fi
+		
+		check_for_mysql_client
+		if [[ $(check_mysql_connection $url $port $user $pass) != "true" ]]; then
+			echo "${red}[ERROR] Cannot connect with your External Database!${end}"
+			exit 1
+		else
+			# Make it global only after verification
+			extdb_user=$user
+			extdb_pass=$pass
+			if [[ $1 != "-nohost" ]]; then
+				extdb_host=$host
+				extdb_url=$url
+				extdb_port=$port
+			fi
+		fi
+	else
+		echo "${red}[ERROR] External DB parameter not found!${end}"
+		exit 1
+	fi
+}
+
+
+wp_config_path() {
+	# If this file exist is because is WP parked
+	# We can not use is_parked here because it will cause an infinite loop (is_parked uses this function)
+	# if parked: check if parked before use this path value
+	if [[ -f /etc/nginx/sites-available/$1 ]]; then
+		local parpath="$(grep -G "root .*;" /etc/nginx/sites-available/$1 | sed -r 's/^.*root (.*)htdocs;$/\1/')wp-config.php"
+	
+		if [[ -n $2 && $2 != "false" && -f /var/www/$1/htdocs$2/wp-config.php ]]; then
+			echo "/var/www/$1/htdocs$2/wp-config.php"
+			
+		# WP take this file first (if exist) and then look one folder below.
+		elif [[ ( -z $2 || $2 == "false" ) && -f /var/www/$1/htdocs/wp-config.php ]]; then
+			echo "/var/www/$1/htdocs/wp-config.php"
+		elif [[ ( -z $2 || $2 == "false" ) && -f /var/www/$1/wp-config.php ]]; then
+			echo "/var/www/$1/wp-config.php"
+		elif [[ ( -z $2 || $2 == "false" ) && -f $parpath ]]; then
+			echo "$parpath"
+		else
+			return
+		fi
+	fi
+}
+
+
+wp_config_read() {
+	# Example: wp_config_read example.com WP_DEBUG
+	# Example: wp_config_read example.com WP_DEBUG /subfolder
+	
+	local path=$(wp_config_path $1 $3)
+	# Last sed is to remove ^M (carriege return character) I don't know why is introduced.
+	[[ -n $1 && -n $2 && -n $path ]] && echo $(grep -iE "^define[ ]?\([ ]?[\"'\'']$2[\"'\''].*$" $path | cut -f 2 -d "," -s | sed 's/[ ;")'\'']//g' | sed -e "s/\r//g" ) || return
+}
+
+
+wp_config_delete() {
+	# Example: wp_config_delete example.com WP_DEBUG
+	# Example: wp_config_delete example.com WP_DEBUG /subfolder
+	
+	local path=$(wp_config_path $1 $3)
+	[[ -n $1 && -n $2 && -n $path ]] && local str=$(grep -iE "^define[ ]?\([ ]?[\"'\'']$2[\"'\''].*$" $path)
+	[[ -n $str ]] && sudo sed -i "/$str/d" $path
+}
+
+
+wp_config_write() {
+	# Example: wp_config_write example.com WP_DEBUG $value
+	# Example: wp_config_write example.com WP_DEBUG $value /subfolder
+	# Example: wp_config_write example.com WP_DEBUG \'test\' <- escaped quotes needed
+	
+	local path=$(wp_config_path $1 $4)
+	
+	# If variable is already defined, update it, if not exist then add a new var at the bottom.
+	if [[ -n $path && -n $(wp_config_read $1 $2 $4) ]]; then
+		sudo sed -i "/$(grep -iE "^define[ ]?\([ ]?[\"'\'']$2[\"'\''].*$" $path)/c \define('$2', $3);" $path
+	elif [[ -n $path ]]; then
+		sudo sed -i "/stop editing/i \define('$2', $3);" $path
+	fi
+}
+
+
+wp_conf_retrieve() {
+	# wp_conf_retrieve example.com
+	# wp_conf_retrieve example.com /subfolder false
+	# wp_conf_retrieve example.com false false
+	# $1 is domain
+	# $2 is subfolder or set to false if empty
+	# $3 is set to false if you want to skip external_db questions.
+	
+	wp_config=$(wp_config_path $1 $2)
+	# Just in case: We should always check is_wp before calling this function
+	# The best error message is the one that never shows up! :)
+	if [[ -z $wp_config || ! -f $wp_config ]]; then
+		echo "${red}[ERROR] WordPress configuration file not found!${end}"
+		return
+	fi
+	
+	wp_dbname=$( wp_config_read $1 DB_NAME $2 )
+	wp_dbuser=$( wp_config_read $1 DB_USER $2 )
+	wp_dbhost=$( wp_config_read $1 DB_HOST $2 )
+	wp_dbpass=$( wp_config_read $1 DB_PASSWORD $2 )
+	wp_dbpref=$( grep -F "table_prefix" $wp_config | cut -f 2 -d "'" -s)
+	extdb_url=$(echo "$wp_dbhost" | cut -f 1 -d ':')
+	extdb_port=$(echo "$wp_dbhost" | cut -f 2 -d ':' -s)
+	
+	[[ ${wp_dbhost,,} == "localhost" ]] && wp_dbhost=${wp_dbhost,,}
+	[[ -z $extdb_port ]] && extdb_port="3306"
+	
+	if [[ $3 != "false" ]]; then
+		if [[ -z $external_db && -n $wp_dbhost && $wp_dbhost != "localhost" && $wp_dbhost == "$(conf_read external-dbh):$(conf_read external-dbx)" ]]; then
+			check_external_db_saved
+		elif [[ -z $external_db && -n $wp_dbhost && $wp_dbhost != "localhost" && -n $(conf_read external-dbh) && $wp_dbhost != "$(conf_read external-dbh):$(conf_read external-dbx)" ]]; then
+			echo "${dim}[INFO] External Database saved credentials found, but we cannot use it because not the same host!${end}"
+		fi
+		
+		if [[ -n $external_db ]]; then
+			external_db_parse -nohost
+		elif [[ -z $external_db && -n $wp_dbhost && $wp_dbhost != "localhost" ]]; then
+			echo "" >&2
+			echo "${gre}External DB${blu} '${extdb_url}:${extdb_port}' ${gre}found in${blu} $1 ${gre}(Press 'Enter' key twice to skip)" >&2
+			read -p "${blu}External DB username: " extdb_user
+			read -p "External DB password: " extdb_pass
+			external_db="[$extdb_user,$extdb_pass,${wp_dbhost}:${wp_dbport}]"
+		fi
+	fi
+}
+
+
+pre_install() {
+	sudo apt -qq update
+	if [[ $(conf_read pre-packs) != true ]]; then
+		# Check for missing essential packages
+		api-events_update i1
+		sudo apt -y -qq install dialog
+		sudo apt -y -qq install software-properties-common
+		sudo apt -y -qq install pwgen
+		sudo apt -y -qq install unzip
+		sudo apt -y -qq install zip
+		conf_write pre-packs true
+		api-events_update i2
+	fi
+}
+
+
+# Remove Installation Files
+app_purge() {
+	sudo rm $HOME/webinoly.tar
+	sudo rm -rf /opt/webinoly/plugins
+}
+
+
+mysql_client_install() {
+	api-events_update im2
+	
+	# https://downloads.mariadb.org/mariadb/repositories/
+	sudo apt-key adv --fetch-keys 'https://mariadb.org/mariadb_release_signing_key.asc'
+	sudo add-apt-repository "deb [arch=amd64,arm64,ppc64el] http://mirrors.syringanetworks.net/mariadb/repo/10.5/ubuntu $(check_osname) main"
+	
+	pre_install
+	sudo apt -y install mariadb-client
+	conf_write mysql-client true
+	echo "${gre}MySQL Client has been successfully installed!${end}"
+	api-events_update im3
+}
+
+
+api-events_update() {
+	conf_write status-api $1
+	if [[ -f /opt/webinoly/lib/api-events ]]; then
+		source /opt/webinoly/lib/api-events
+		api-events_catch_status $1
+	fi
+}
+
+
+remove_nginx_default_server() {
+	if [[ -n $1 && -f /etc/nginx/sites-available/$1 ]]; then
+		sudo sed -i "s/listen 80 default_server;/listen 80;/" /etc/nginx/sites-available/$1
+		sudo sed -i "s/listen \[::\]:80 default_server;/listen [::]:80;/" /etc/nginx/sites-available/$1
+		sudo sed -i "s/listen 443 ssl http2 default_server;/listen 443 ssl http2;/" /etc/nginx/sites-available/$1
+		sudo sed -i "s/listen \[::\]:443 ssl http2 default_server;/listen [::]:443 ssl http2;/" /etc/nginx/sites-available/$1
+		sudo sed -i '/WebinolyStartBlackhole/,/WebinolyEndBlackhole/{/.*/d}' /etc/nginx/sites-available/$1
+	fi
+}
+
+
+check_for_parameters() {
+	# Global variables: domain, tld, subdomain, main_domain, sub_domain, empty_param
+	
+	# Check for domain parameter if is first parameter and have no hyphen at the begining.
+	if [[ -n $1 && $(echo $1 | cut -c-1) != "-" ]]; then
+		domain=$1
+		shift
+		
+		local count=1
+		while true; do
+			tld=$(echo $domain | cut -d'.' -f ${count}- -s)
+			if grep -Fxq "$tld" /opt/webinoly/lib/public_suffix_list.dat || [ -z $tld ]; then
+				break
+			fi
+			count=$[$count+1]
+		done
+		[[ $count -gt 2 ]] && subdomain="true" || subdomain="false"
+		
+		if [[ $subdomain == "true" && -n $tld ]]; then
+			main_domain=$(echo $domain | cut -d'.' -f $[$count-1]- -s)
+			sub_domain=$(echo $domain | cut -d'.' -f -$[$count-2] -s)
+		fi
+	fi
+	
+	for arg in $@; do
+		local check=$(echo "${arg}" | cut -c-1)
+		local arg=${arg:1}
+		local par=$(echo "${arg}" | cut -d'=' -f 1 -s)
+		local val=$(echo "${arg}" | cut -d'=' -f 2 -s)
+		[[ -z $par ]] && par=$arg
+		[[ -z $val && $par == "conf-value_"* ]] && val="NeverMatchString" #Special value to allow the string "true" as a valid value.
+		[[ -z $val ]] && val=true
+		
+		# Check for Webinoly -conf-value_
+		if [[ $par == "conf-value_"* ]]; then
+			dyn_var=$(echo "${par}" | cut -d'_' -f 2 -s)
+			par=$(echo "${par}" | cut -d'_' -f 1 -s)
+		fi
+		
+		# Convert to lowercase and support for hyphen in arguments.
+		par=${par,,}
+		par=$(echo $par | sed "s/-/_/g")
+		
+		# Only valid variables names and check for begin with hyphen.
+		if [[ $check == "-" && $par =~ ^[a-zA-Z_][a-zA-Z_0-9]*$ ]]; then
+			[[ -n $par ]] && eval $par=\$val
+		else
+			echo "${red}[ERROR] Invalid parameters! ${end}"
+			exit 1
+		fi
+	done
+	[[ -z $@ ]] && empty_param="true"
+}
+
+
+is_ip() {
+	# Check for valid IPv4 and IPv6 values, including CIDR.
+	if [[ -n $1 && $1 =~ ^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\/([0-9]|[1-2][0-9]|3[0-2]))?$ || $1 =~ ^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))(\/([0-9]|[1-9][0-9]|1[0-2][0-8]))?$ ]]; then
+		echo "true"
+	else
+		echo "false"
+	fi
+}
+
+
+is_domain() {
+	# Only numerals 0-9, basic Latin letters, both lowercase and uppercase, hyphen.
+	if ! [[ $1 =~ ^[\.0-9A-Za-z\-]+$ ]]; then
+		echo "false"
+	
+	# Check Lenght
+	elif [[ ${#1} -gt 67 ]]; then
+		echo "false"
+		
+	# Can not start or end with a hyphen
+	elif [[ $(echo "${1}" | cut -c-1) == "-" || $(echo "${1}" | rev | cut -c-1) == "-" ]]; then
+		echo "false"
+	
+	# Can not contain two points together and can not start or end with a point
+	elif [[ $1 == *..* || $(echo "${1}" | cut -c-1) == "." || $(echo "${1}" | rev | cut -c-1) == "." ]]; then
+		echo "false"
+	
+	# Check if IP address
+	elif [[ $(is_ip $1) == "true" ]]; then
+		echo "false"
+	
+	else
+		echo "true"
+	fi
+}
+
+
+is_url_path() {
+	# Should start with / and after that all should be valid characters.
+	if [[ -n $1 && $1 =~ ^\/([\]A-Za-z0-9_\/\.:\!\*\'\[\(\)\;@\&\=\+\$\,\?#\~\%\-]+)?$ ]]; then
+		echo "true"
+	else
+		echo "false"
+	fi
+}
+
+
+is_url() {
+	# Output: http,https,ip,true,false  Example: $(is_url $domain)
+	# Global variables when -split is set: url_scheme, url_host, url_path, url_port    Example: is_url $domain -split
+	
+	local scheme=$(echo "${1,,}" | cut -d':' -f 1 -s)
+	local host=$(echo "${1,,}" | cut -d':' -f 2 -s | cut -d'/' -f 3 -s)
+	local path=$(echo "${1,,}" | cut -d':' -f 2- -s | cut -d'/' -f 4- -s)
+	local port=$(echo "${1,,}" | cut -d':' -f 3 -s | cut -d'/' -f 1 )
+	local out="false"
+	
+	# In case of no-scheme format
+	local hosted=$(echo "${1,,}" | cut -d'/' -f 1)
+	# In case of no-scheme have port included
+	[[ $(echo $hosted | cut -d':' -f 2 -s) =~ ^[0-9]+$ ]] && hosted=$(echo $hosted | cut -d':' -f 1)
+	
+	if [[ $scheme =~ ^(http|https)$ ]]; then	
+		if [[ $(is_domain $host) != "true" && $(is_ip $host) != "true" ]]; then
+			out="false"
+		elif [[ -n $path && $(is_url_path /$path) != "true" ]]; then
+			out="false"
+		elif [[ -n $port ]] && ! [[ $port =~ ^[0-9]+$ && $port -ge 0 && $port -le 65535 ]]; then
+			out="false"
+		else
+			out=$scheme
+		fi
+	elif [[ $(is_domain $hosted) == "true" || $(is_ip $hosted) == "true" ]]; then
+		scheme=""
+		host=$hosted
+		path=$(echo "${1,,}" | cut -d'/' -f 2- -s)
+		port=$(echo "${1,,}" | cut -d'/' -f 1 | cut -d':' -f 2 -s)
+		
+		if [[ -n $path && $(is_url_path /$path) != "true" ]]; then
+			out="false"
+		elif [[ -n $port ]] && ! [[ $port =~ ^[0-9]+$ && $port -ge 0 && $port -le 65535 ]]; then
+			out="false"
+		elif [[ $(is_ip $hosted) == "true" ]]; then
+			out="ip"		
+		else
+			out="true"
+		fi
+	else
+		out="false"
+	fi
+	
+	if [[ $2 == "-split" && $out != "false" ]]; then
+		url_scheme=$scheme
+		url_host=$host
+		[[ -n $path ]] && url_path="/$path"
+		url_port=$port
+	elif [[ $2 != "-split" ]]; then
+		echo $out
+	fi
+}
+
+
+is_ssl() {
+	[[ -f /etc/nginx/sites-available/$1 && -n $(sed -n -e '/WebinolyNginxServerStart/,$p' /etc/nginx/sites-available/$1 | grep -F "ssl_certificate_key") ]] && echo "true" || echo "false"
+}
+
+
+is_ssl_le() {
+	[[ -f /etc/nginx/sites-available/$1 && -n $(sed -n -e '/WebinolyNginxServerStart/,$p' /etc/nginx/sites-available/$1 | grep -F "ssl_certificate_key /etc/letsencrypt/live/") && -z $(grep -F "WebinolySSLCustomCert" /etc/nginx/sites-available/$1) ]] && echo "true" || echo "false"
+}
+
+
+is_ssl_staging() {
+	[[ -f /etc/letsencrypt/renewal/$1.conf && -n $(grep -E "^server = " /etc/letsencrypt/renewal/$1.conf | cut -d'=' -f 2 -s | grep -F "acme-staging-") ]] && echo "true" || echo "false"
+}
+
+
+is_html() {
+	# $1 = domain, $2 = subfolder
+	[[ -f /etc/nginx/sites-available/$1 && -n $(sed -n -e '/WebinolyNginxServerStart/,$p' /etc/nginx/sites-available/$1 | grep -F "location $2/ { try_files ") ]] && echo "true" || echo "false"
+}
+
+is_php() {
+	# $1 = domain, $2 = subfolder
+	if [[ -f /etc/nginx/sites-available/$1 ]]; then
+		local isphp=$(sed -n -e '/WebinolyNginxServerStart/,$p' /etc/nginx/sites-available/$1 | grep -E " common/phpx?\.conf;")
+		
+		if [[ -n $2 && $(is_wp $1 $2) == "false" ]]; then
+			local subn=$(echo $2 | sed "s/\//_/g")
+			if [[ -n $(sed -n -e '/WebinolyNginxServerStart/,$p' /etc/nginx/sites-available/$1 | grep -E " apps\.d/$1$subn-phpx?\.conf;") ]]; then
+				echo "true"
+			else
+				echo "false"
+			fi
+		elif [[ -n $isphp && $(is_wp $1) == "false" ]]; then
+			echo "true"
+		else
+			echo "false"
+		fi
+	else
+		echo "false"
+	fi
+}
+
+
+is_proxy() {
+	# $1 = domain, $2 = subfolder
+	[[ -n $2 ]] && local subn=$(echo $2 | sed "s/\//_/g")
+	[[ -f /etc/nginx/sites-available/$1 && -n $(sed -n -e '/WebinolyNginxServerStart/,$p' /etc/nginx/sites-available/$1 | grep -F " apps.d/$1$subn-proxy.conf;") ]] && echo "true" || echo "false"
+}
+
+
+is_forward() {
+	if [[ -f /etc/nginx/sites-available/$1 ]]; then
+		local index=$(sed -n -e '/WebinolyNginxServerStart/,$p' /etc/nginx/sites-available/$1 | grep -F "index ")
+		local return=$(sed -n -e '/WebinolyNginxServerStart/,$p' /etc/nginx/sites-available/$1 | grep -F "return 301 ")
+		[[ ! -d /var/www/$1 && -z $index && -n $return ]] && echo "true" || echo "false"
+	else
+		echo "false"
+	fi
+}
+
+
+is_parked() {
+	# Last weird proxy check is for parked with proxy main site
+	[[ -f /etc/nginx/sites-available/$1 && ! -d /var/www/$1 && $(is_proxy $1) == "false" && $(is_forward $1) == "false" && ( $(is_html $1) == "true" || $(is_php $1) == "true" || $(is_wp $1) == "true" || $(is_proxy $(grep -E "include /var/www/.*/\*-nginx.conf;" /etc/nginx/sites-available/$1 | cut -d'/' -f 4 -s)) == "true" ) ]] && echo "true" || echo "false"
+}
+
+
+is_wp() {
+	# $1 = domain, $2 = WP subfolder
+	[[ -n $2 ]] && local subn=$(echo $2 | sed "s/\//_/g")	
+	
+	if [[ -z $2 && -f /etc/nginx/sites-available/$1 && -n $(sed -n -e '/WebinolyNginxServerStart/,$p' /etc/nginx/sites-available/$1 | grep -F " common/wpcommon") ]]; then
+		[[ -f $(wp_config_path $1) ]] && echo "true" || echo "false"
+	elif [[ -n $2 && -f /etc/nginx/sites-available/$1 && -f /etc/nginx/apps.d/$1$subn-wpcommon.conf ]]; then
+		[[ -f $(wp_config_path $1 $2) ]] && echo "true" || echo "false"
+	else
+		echo "false"
+	fi
+}
+
+is_wp_cache() {
+	# $1 = domain, $2 = WP subfolder
+	[[ -n $2 ]] && local subn=$(echo $2 | sed "s/\//_/g")
+	if [[ -z $2 && -f /etc/nginx/sites-available/$1 && -n $(sed -n -e '/WebinolyNginxServerStart/,$p' /etc/nginx/sites-available/$1 | grep -F " common/wpfc.conf;") ]]; then
+		echo "true"
+	elif [[ -n $2 && -f /etc/nginx/sites-available/$1 && -n $(sed -n -e '/# WebinolyCustom/,$p' /etc/nginx/sites-available/$1 | grep -F "$1$subn-wpfc.conf;") ]]; then
+		echo "true"
+	else
+		echo "false"
+	fi
+}
+
+is_wp_multisite() {
+	wp_conf_retrieve $1 $2
+	local dbsetup="SELECT * FROM information_schema.tables WHERE table_schema = '$wp_dbname' AND table_name = '${wp_dbpref}sitemeta' LIMIT 1;"
+	local dbsetuc="USE $wp_dbname; SELECT meta_value FROM ${wp_dbpref}sitemeta where meta_key='subdomain_install';"
+	
+	if [[ $wp_dbhost == "localhost" && $(check_mysql_connection localhost) == "true" ]]; then
+		wpmu=$(sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS -e "$dbsetup")
+		[[ -n $wpmu ]] && mutype=$(sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS -e "$dbsetuc")
+	elif [[ $(check_mysql_connection $extdb_url $extdb_port $extdb_user $extdb_pass) == "true" ]]; then
+		wpmu=$(sudo mysql --connect-timeout=10 -h "$extdb_url" -P "$extdb_port" -u"$extdb_user" -p"$extdb_pass" -e "$dbsetup")
+		[[ -n $wpmu ]] && mutype=$(sudo mysql --connect-timeout=10 -h "$extdb_url" -P "$extdb_port" -u"$extdb_user" -p"$extdb_pass" -e "$dbsetuc")
+	fi
+	
+	if [[ $(echo $mutype | cut -f 2 -d " " -s) == "1" ]]; then
+		echo "subdomain"
+	elif [[ -n $wpmu ]]; then
+		echo "subdirectory"
+	else
+		echo "false"
+	fi
+}
+
+
+is_wp_installed() {
+	# This function check if WP db exists.
+	# When you create a WP site, DB is created only after the initial WP installation wizard is completed.
+	
+	wp_conf_retrieve $1 $2
+	local dbsetup="SELECT * FROM information_schema.tables WHERE table_schema = '$wp_dbname' AND table_name = '${wp_dbpref}options' LIMIT 1;"
+	
+	if [[ $wp_dbhost == "localhost" && $(check_mysql_connection localhost) == "true" ]]; then
+		[[ -n $(sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS -e "$dbsetup") ]] && echo "true" || echo "false"
+	elif [[ $(check_mysql_connection $extdb_url $extdb_port $extdb_user $extdb_pass) == "true" ]]; then
+		[[ -n $(sudo mysql --connect-timeout=10 -h "$extdb_url" -P "$extdb_port" -u"$extdb_user" -p"$extdb_pass" -e "$dbsetup") ]] && echo "true" || echo "false"
+	else
+		echo "false"
+	fi
+}
+
+
+is_wp_debug() {
+	[[ $( wp_config_read $1 WP_DEBUG $2 ) == "true" ]] && echo "true" || echo "false"
+}
+
+
+is_wp_auth() {
+	[[ -n $2 ]] && local subn=$(echo $2 | sed "s/\//_/g")
+
+	if [[ -z $2 && -f /etc/nginx/sites-available/$1 && -n $( grep -F "wpcommon.conf;" /etc/nginx/sites-available/$1 ) ]]; then
+		echo "true"
+	elif [[ -n $2 && -f /etc/nginx/sites-available/$1 && -n $( grep -F "wpcommon.conf;" /etc/nginx/apps.d/$domain$subn-php.conf ) ]]; then
+		echo "true"
+	else
+		echo "false"
+	fi
+}
+
+
+is_force_redirect() {
+	if [[ -f /etc/nginx/sites-available/$1 && -n $( grep -F "WebinolyWWWredirectStart" /etc/nginx/sites-available/$1 ) ]]; then
+		[[ -n $(sed -n -e '/WebinolyWWWredirectStart/,/WebinolyWWWredirectEnd/p' /etc/nginx/sites-available/$1 | grep -F "server_name www.${1};") ]] && echo "root" || echo "www"
+	else
+		echo "off"
+	fi
+}
+
+
+is_subfolder() {
+	# $1 = domain, $2 = subfolder
+	if [[ -n $1 && -n $2 ]]; then
+		if [[ $(is_wp $1 $2) == "true" ]]; then
+			echo "wp"
+		elif [[ $(is_php $1 $2) == "true" ]]; then
+			echo "php"
+		elif [[ $(is_proxy $1 $2) == "true" ]]; then
+			echo "proxy"
+		elif [[ $(is_html $1 $2) == "true" ]]; then
+			echo "html"
+		elif [[ -d /var/www/$1/htdocs/$2 ]]; then
+			echo "true"
+		else
+			echo "false"
+		fi
+	else
+		echo "false"
+	fi
+}
+
+
+is_empty_root_site() {
+	# $1 = domain
+	if [[ -n $1 ]]; then
+		if [[ $(is_wp $1) == "true" || $(is_php $1) == "true" || $(is_proxy $1) == "true" || $(is_html $1) == "true" || $(is_parked $1) == "true" || $(is_forward $1) == "true" ]]; then
+			echo "false"
+		elif [[ -f /etc/nginx/sites-available/$1 ]]; then
+			echo "true"
+		else
+			echo "false"
+		fi
+	else
+		echo "false"
+	fi
+}
+
+
+is_dd_log() {
+	if [[ $1 == "nginx" ]]; then
+		local ddpath="/etc/datadog-agent/conf.d/nginx.d/conf.yaml"
+	elif [[ $1 == "fpm" ]]; then
+		local ddpath="/etc/datadog-agent/conf.d/php_fpm.d/conf.yaml"
+	elif [[ $1 == "mysql" ]]; then
+		local ddpath="/etc/datadog-agent/conf.d/mysql.d/conf.yaml"
+	elif [[ $1 == "redis" ]]; then
+		local ddpath="/etc/datadog-agent/conf.d/redisdb.d/conf.yaml"
+	elif [[ $1 == "global" ]]; then
+		[[ -f /etc/datadog-agent/datadog.yaml && -n $(grep -F "WebinolyLogsStart" /etc/datadog-agent/datadog.yaml) ]] && local global="true"
+	else
+		local ddpath=""
+	fi
+	
+	[[ -n $global || ( -n $ddpath && -f $ddpath && -n $(grep -F "WebinolyDatadogLogsStart" $ddpath)) ]] && echo "true" || echo "false"
+}
+
+
+is_log() {
+	[[ -f /etc/nginx/sites-available/$1 && -n $(sed -n -e '/WebinolyNginxServerStart/,$p' /etc/nginx/sites-available/$1 | grep -F "nginx/$1.access.log ") ]] && echo "true" || echo "false"
+}
+
+
+escaped_string() {
+	# Escaped characters: Put a backslash before $.*/[\]^()
+	echo $(echo $1 | sed "s#/#\\\/#g" | sed "s/\./\\\./g" | sed "s/\\$/\\\\$/g" | sed "s/\*/\\\*/g" | sed "s/\\\/\\\\/g" | sed "s/\[/\\\[/g" | sed "s/\]/\\\]/g" | sed "s/\^/\\\^/g" | sed -E "s/\(/\\\(/g" | sed -E "s/\)/\\\)/g")
+}
+
+
+site_type() {
+	if [[ -z $1 ]]; then
+		echo "false"
+	elif [[ $(is_parked $1) == "true" ]]; then
+		echo "Parked"
+	elif [[ $(is_wp $1) == "true" ]]; then
+		echo "WordPress"
+	elif [[ $(is_php $1) == "true" ]]; then
+		echo "PHP"
+	elif [[ $(is_html $1) == "true" ]]; then
+		echo "HTML"
+	elif [[ $(is_proxy $1) == "true" ]]; then
+		echo "Reverse Proxy"
+	elif [[ $(is_forward $1) == "true" ]]; then
+		echo "Forward"
+	elif [[ $(is_empty_root_site $1) == "true" ]]; then
+		echo "Subfolders"
+	else
+		echo "Unknown"
+	fi
+}
+
+
+email_update() {
+	echo "${blu}"
+	if [[ -z $1 && ( -z $email || $email == "true" ) ]]; then
+		read -p "Email address: ${end}" mail
+	else
+		[[ -z $1 ]] && local mail=$email || local mail=$1
+	fi
+	
+	if [[ $mail =~ ^[a-z0-9_\+-]+(\.[a-z0-9_\+-]+)*@[a-z0-9-]+(\.[a-z0-9-]+)*\.([a-z]{2,4})$ ]]; then
+		conf_write mail $mail
+		[[ ! -f /root/.forward ]] && sudo touch /root/.forward || sudo truncate -s 0 /root/.forward
+		sudo echo "$mail" >> /root/.forward
+		[[ -d /etc/letsencrypt/renewal ]] && sudo certbot update_account --email $mail --no-eff-email
+		echo "${gre}Email address has been successfuly validated and saved!"
+	else
+		echo "${red}Please enter a valid email address!"
+	fi
+	echo "${end}"
+}
+
+
+edit_wp_db_url() {
+	#Example: edit_wp_db_url example.com "http://${domain}${subfolder}"
+	#Example: edit_wp_db_url example.com "http://${domain}${subfolder}" /subfolder
+	wp_conf_retrieve $1 $3
+	if [[ -n $1 && -n $2 && $(is_wp $1 $3) == "true" && $(is_wp_installed $1 $3) == "true" ]]; then
+		if [[ $wp_dbhost == "localhost" && $(check_mysql_connection localhost) == "true" ]]; then
+			sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS <<_EOF_
+USE $wp_dbname;
+UPDATE ${wp_dbpref}options SET option_value='$2' WHERE option_name='home';
+UPDATE ${wp_dbpref}options SET option_value='$2' WHERE option_name='siteurl';
+FLUSH PRIVILEGES;
+_EOF_
+
+		elif [[ $(check_mysql_connection $extdb_url $extdb_port $extdb_user $extdb_pass) == "true" ]]; then
+			sudo mysql --connect-timeout=10 -h "$extdb_url" -P "$extdb_port" -u"$extdb_user" -p"$extdb_pass" <<_EOF_
+USE $wp_dbname;
+UPDATE ${wp_dbpref}options SET option_value='$2' WHERE option_name='home';
+UPDATE ${wp_dbpref}options SET option_value='$2' WHERE option_name='siteurl';
+FLUSH PRIVILEGES;
+_EOF_
+		fi
+	fi
+}
+
+
+db_user_role() {
+	# Can't be used on not global users: FILE,REPLICATION CLIENT,REPLICATION SLAVE,PROCESS,SHOW DATABASES,CREATE USER,RELOAD,GRANT,SUPER,SHUTDOWN
+	# FILE Privilege not supported by external DB's: http://cloudofnines.blogspot.com/2014/09/in-rds-instances-file-privilege-for.html
+	# AWS RDS Reference: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.MasterAccounts.html
+	# ALL PRIVILEGES not supported for external DB's.
+	
+	if [[ $(conf_read dbrole) == "all" ]]; then
+		local priv="ALL PRIVILEGES"
+	elif [[ $(conf_read dbrole) == "basic" ]]; then
+		local priv="SELECT,INSERT,UPDATE,DELETE"
+	elif [[ $(conf_read dbrole) == "limited" ]]; then
+		local priv="SELECT,INSERT,UPDATE,DELETE,CREATE,DROP,INDEX,ALTER"
+	elif [[ $(conf_read dbrole) == "complete" ]]; then
+		local priv="SELECT,INSERT,UPDATE,DELETE,CREATE,DROP,INDEX,ALTER,CREATE TEMPORARY TABLES,EXECUTE,CREATE VIEW,SHOW VIEW,CREATE ROUTINE,ALTER ROUTINE,EVENT,TRIGGER"
+	else # full
+		local priv="SELECT,INSERT,UPDATE,DELETE,CREATE,DROP,INDEX,ALTER,CREATE TEMPORARY TABLES,EXECUTE,CREATE VIEW,SHOW VIEW,CREATE ROUTINE,ALTER ROUTINE,EVENT,TRIGGER,REFERENCES,LOCK TABLES"
+	fi
+
+	echo $priv
+}
+
+
+mysql_default_cnf() {
+	# Creates the default Webinoly Configuration File (.cnf) for mysql if not exists.
+	if [[ ! -f /etc/mysql/mariadb.conf.d/90-webinoly.cnf ]]; then
+		sudo touch /etc/mysql/mariadb.conf.d/90-webinoly.cnf
+		sudo chmod 644 /etc/mysql/mariadb.conf.d/90-webinoly.cnf
+		sudo chown -R root:root /etc/mysql/mariadb.conf.d/90-webinoly.cnf
+		
+		echo "# Webinoly MySQL Configuration File
+[mysqld]
+log_error = /var/log/mysql/error.log" >> /etc/mysql/mariadb.conf.d/90-webinoly.cnf
+	fi
+}
+

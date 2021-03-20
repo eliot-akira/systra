@@ -1,0 +1,382 @@
+#!/bin/bash
+
+# View logs in real time Plugins
+# Syntax: log <domain> <option>
+# Options: -wp, -error, -mail, -php o -fpm, -mysql, -only-error, -le, -ssh, -syslog
+# Arguments: -lines, -display, -enable, -disable
+# Notes: If no domain or option is entered, access logs are displayed.
+
+source /opt/webinoly/lib/general
+check_for_parameters $@
+api-events_update lgs
+
+error() {
+	echo "${red}[ERROR] Log file not found! ${end}"
+	exit 1
+}
+waiting_for_log() {
+	echo "${blu}[Log File is Empty] ${dim}Waiting to receive some data, you will see it in real-time here...${end}"
+}
+cnf_delete() {
+	#Example: cnf_delete error_log
+	[[ -f /etc/mysql/mariadb.conf.d/90-webinoly.cnf ]] && sudo sed -i "/^$1 /d" /etc/mysql/mariadb.conf.d/90-webinoly.cnf
+}
+cnf_write() {
+	#Example: cnf_write error_log /var/log/mysql/error.log
+	cnf_delete $1
+	[[ -n $2 ]] && local value="= $2"
+	echo "$1 $value" >> /etc/mysql/mariadb.conf.d/90-webinoly.cnf
+}
+cnf_read() {
+	#Example: cnf_read error_log
+	echo $( grep -P "^$1 = " /etc/mysql/mariadb.conf.d/90-webinoly.cnf | cut -f 2 -d "=" -s | sed 's/ //g' )
+}
+
+
+# Check for custom "lines" value
+[[ -n $(conf_read log-lines) && $(conf_read log-lines) =~ ^[0-9]+$ && $(conf_read log-lines) -gt 0 ]] && clines=$(conf_read log-lines) || clines=10
+[[ -n $lines && $lines =~ ^[0-9]+$ && $lines -gt 0 ]] && clines=$lines
+
+
+if [[ -n $purge ]]; then
+	if [[ $purge =~ ^(nginx|letsencrypt|mysql|redis|force)$ ]]; then
+		answer="Y"
+		if [[ $purge =~ ^(nginx|letsencrypt|mysql|redis)$ ]]; then
+			fol="/$purge"
+			mes="($purge) "
+		else
+			fol=""
+		fi
+	elif [[ $purge =~ ^(all|true)$ ]]; then
+		echo "${gre}"
+		echo "All your logs GZ files will be removed from your server!"
+		echo "${blu}Are you sure [y/N]? "
+		while read -r -n 1 -s answer; do
+			answer=${answer:-n}
+			echo ""
+			[[ $answer = [YyNn] ]] && break
+		done
+	else
+		echo "${red}[ERROR] Invalid log value!${end}"
+		exit 1
+	fi
+	
+	if [[ ! -d /var/log$fol ]]; then
+		echo "${red}[ERROR] Log folder not found!${end}"
+		exit 1
+	elif [[ $answer == [Yy] ]]; then
+		sudo find /var/log$fol -name "*.gz" -type f -delete
+		echo "${gre}All your logs ${mes}GZ files has been successfully removed from your server!${end}"
+	else
+		echo "${red}Action aborted!${end}"
+		exit 1
+	fi
+	
+	
+elif [[ -n $mail || -n $email ]]; then
+	if [[ -f /var/log/mail.log && -f /var/log/mail.err ]]; then
+		[[ ! -s /var/log/mail.log && ! -s /var/log/mail.err ]] && waiting_for_log
+		sudo tail -f --lines=$clines /var/log/mail.log /var/log/mail.err
+	elif [[ -f /var/log/mail.log ]]; then
+		[[ ! -s /var/log/mail.log ]] && waiting_for_log
+		sudo tail -f --lines=$clines /var/log/mail.log
+	elif [[ -f /var/log/mail.err ]]; then
+		[[ ! -s /var/log/mail.err ]] && waiting_for_log
+		sudo tail -f --lines=$clines /var/log/mail.err
+	else
+		error
+	fi
+elif [[ -n $fpm || -n $php ]]; then
+	check_for_php
+	# REMOVE: Temporal check because we change log path in v1.11.0
+	php_log_path=$(grep -w "^error_log = .*" /etc/php/$(conf_read php-ver)/fpm/php-fpm.conf | cut -f 3 -d ' ')
+	if [[ -f $php_log_path ]]; then
+		[[ ! -s $php_log_path ]] && waiting_for_log
+		sudo tail -f --lines=$clines $php_log_path
+	else
+		error
+	fi
+elif [[ -n $le ]]; then
+	if [[ -f /var/log/letsencrypt/letsencrypt.log ]]; then
+		[[ ! -s /var/log/letsencrypt/letsencrypt.log ]] && waiting_for_log
+		sudo tail -f --lines=$clines /var/log/letsencrypt/letsencrypt.log
+	elif [[ ! -L /usr/bin/letsencrypt ]]; then
+		echo "${red}[ERROR] Seems like Let's Encrypt is not installed!${end}"
+		exit 1
+	else
+		error
+	fi
+elif [[ -n $ssh ]]; then
+	if [[ -f /var/log/auth.log ]]; then
+		[[ ! -s /var/log/auth.log ]] && waiting_for_log
+		sudo tail -f --lines=$clines /var/log/auth.log
+	else
+		error
+	fi
+
+
+# MySQL Logs
+elif [[ -n $mysql ]]; then
+	check_for_mysql && mysql_default_cnf
+	
+	# General Log
+	if [[ $mysql == "general" ]]; then
+		if [[ -n $enable ]]; then
+			cnf_write general_log 1
+			cnf_write general_log_file /var/log/mysql/mysql.log
+			sudo service mysql restart
+			echo "${gre}MariaDB General log was successfully enabled!${end}"
+		elif [[ -n $disable ]]; then
+			cnf_write general_log 0
+			sudo service mysql restart
+			echo "${gre}MariaDB General log was successfully disabled!${end}"
+		elif [[ -f /var/log/mysql/mysql.log && $(cnf_read general_log) == 1 ]]; then
+			[[ ! -s /var/log/mysql/mysql.log ]] && waiting_for_log
+			sudo tail -f --lines=$clines /var/log/mysql/mysql.log
+		elif [[ $(cnf_read general_log) != 1 ]]; then
+			echo "${red}[ERROR] MariaDB General log is not enabled!${end}"
+			exit 1
+		else
+			echo "${red}[ERROR] MariaDB General log file not found or still empty!${end}"
+			exit 1
+		fi
+	
+	# Slow Query Log
+	elif [[ $mysql == "slow" ]]; then
+		if [[ -n $enable ]]; then
+			cnf_write slow_query_log 1
+			sudo service mysql restart
+			echo "${gre}MariaDB Slow Query log was successfully enabled!${end}"
+		elif [[ -n $disable ]]; then
+			cnf_write slow_query_log 0
+			sudo service mysql restart
+			echo "${gre}MariaDB Slow Query log was successfully disabled!${end}"
+		elif [[ -f /var/log/mysql/mariadb-slow.log && $(cnf_read slow_query_log) == 1 ]]; then
+			[[ ! -s /var/log/mysql/mariadb-slow.log ]] && waiting_for_log
+			sudo tail -f --lines=$clines /var/log/mysql/mariadb-slow.log
+		elif [[ $(cnf_read slow_query_log) != 1 ]]; then
+			echo "${red}[ERROR] MariaDB Slow Query log is not enabled!${end}"
+			exit 1
+		else
+			echo "${red}[ERROR] MariaDB Slow Query log file not found or still empty!${end}"
+			exit 1
+		fi
+	
+	# Binary Log
+	elif [[ $mysql == "binary" ]]; then
+		if [[ -n $enable ]]; then
+			cnf_delete skip-log-bin
+			cnf_write log_bin /var/log/mysql/mariadb-bin
+			cnf_write log_bin_index /var/log/mysql/mariadb-bin.index
+			sudo service mysql restart
+			echo "${gre}MariaDB Binary log was successfully enabled!${end}"
+		elif [[ -n $disable ]]; then
+			cnf_delete log_bin
+			cnf_delete log_bin_index
+			cnf_write skip-log-bin
+			sudo service mysql restart
+			echo "${gre}MariaDB Binary log was successfully disabled!${end}"
+		elif [[ -f /var/log/mysql/mariadb-bin && -n $(cnf_read log_bin) ]]; then
+			[[ ! -s /var/log/mysql/mariadb-bin ]] && waiting_for_log
+			sudo tail -f --lines=$clines /var/log/mysql/mariadb-bin
+		elif [[ -z $(cnf_read log_bin) ]]; then
+			echo "${red}[ERROR] MariaDB Binary log is not enabled!${end}"
+			exit 1
+		else
+			echo "${red}[ERROR] MariaDB Binary log file not found or still empty!${end}"
+			exit 1
+		fi
+		
+	# Error Log
+	elif [[ $mysql =~ ^(error|true)$ ]]; then
+		if [[ -f /var/log/mysql/error.log ]]; then
+			[[ ! -s /var/log/mysql/error.log ]] && waiting_for_log
+			sudo tail -f --lines=$clines /var/log/mysql/error.log
+		else
+			echo "${red}[ERROR] MariaDB Error log file not found or still empty! ${dim}(Older versions sent MySQL error log to syslog, check it!)${end}"
+			exit 1
+		fi
+		
+	else
+		echo "${red}[ERROR] Invalid value for MySQL Log!${end}"
+		exit 1
+	fi
+
+
+# Syslog
+elif [[ -n $syslog ]]; then
+	if [[ -s /var/log/syslog ]]; then
+		[[ ! -s /var/log/syslog ]] && waiting_for_log
+		sudo tail -f --lines=$clines /var/log/syslog
+	else
+		echo "${red}[ERROR] MariaDB Error log (syslog) file not found or still empty!${end}"
+		exit 1
+	fi	
+
+
+# Turn On/Off Access Logs
+elif [[ -n $only_error ]]; then
+	if ! [[ $only_error =~ ^(on|off)$ ]]; then
+		echo "${red}[ERROR] Empty or not valid parameter for Only-Error!${end}"
+		exit 1
+	fi
+	
+	# Global-Conf
+	if [[ -z $domain ]]; then
+		[[ $(conf_read nginx) == "true" ]] && islog=$( grep -F "access_log off;" /etc/nginx/nginx.conf )
+		if [[ $only_error == "on" ]]; then
+			api-events_update lg1
+			if [[ -z $islog ]]; then
+				[[ $(conf_read nginx) == "true" ]] && sudo sed -i '/access_log/c \	access_log off;' /etc/nginx/nginx.conf
+				conf_write global-access-log-off true
+				sudo service nginx reload
+				echo "${gre}Only-Error Log was successfully enabled (global)!${end}"
+			else	
+				echo "${gre}Only-Error Log is already enabled (global)!${end}"
+			fi
+		elif [[ $only_error == "off" ]]; then
+			api-events_update lg2
+			if [[ -n $islog || ( -z $islog && $(conf_read nginx) != "true" ) ]]; then
+				[[ $(conf_read nginx) == "true" ]] && sudo sed -i "/access_log/c \	access_log \/var\/log\/nginx\/access.log;" /etc/nginx/nginx.conf
+				conf_write global-access-log-off purged
+				sudo service nginx reload
+				echo "${gre}Only-Error Log was successfully disabled (global)!${end}"
+			else	
+				echo "${gre}Only-Error Log is already disabled (global)!${end}"
+			fi
+		fi
+	fi
+	
+	# Per site
+	if [[ -n $domain && -f /etc/nginx/sites-available/$domain ]]; then
+		check_for_nginx
+		if [[ $domain == "default" || $domain == $(conf_read tools-port) ]]; then
+			echo "${red}[ERROR] Only-Error is not allowed to be used in Tools-Port or Default Nginx site! ${end}"
+			exit 1
+		fi
+		
+		if [[ $only_error == "on" ]]; then
+			api-events_update lg3
+			if [[ $(is_log $domain) == "true" ]]; then
+				sudo sed -i '/access_log/c \	access_log off;' /etc/nginx/sites-available/$domain
+				sudo service nginx reload
+				echo "${gre}Only-Error Log was successfully enabled for ${blu}${domain} ${gre}site!${end}"
+			else	
+				echo "${gre}Access Log is already enabled for ${blu}${domain} ${gre}site!${end}"
+			fi
+		elif [[ $only_error == "off" ]]; then
+			api-events_update lg4
+			if [[ $(is_log $domain) != "true" ]]; then
+				sudo sed -i "/access_log/c \	access_log \/var\/log\/nginx\/${domain}.access.log we_log;" /etc/nginx/sites-available/$domain
+				sudo service nginx reload
+				echo "${gre}Only-Error Log was successfully disabled for ${blu}${domain} ${gre}site!${end}"
+			else	
+				echo "${gre}Access Log is already disabled for ${blu}${domain} ${gre}site!${end}"
+			fi
+		fi
+	elif [[ -n $domain && ! -f /etc/nginx/sites-available/$domain ]]; then
+		echo "${red}[ERROR] Domain not found!${end}"
+		exit 1
+	fi
+
+	
+# Site log files
+elif [[ -n $domain && -f /etc/nginx/sites-available/$domain ]]; then
+	# Check if Access Log is enabled
+	if [[ -z $error && -z $wp && $(is_log $domain) != "true" ]]; then
+		echo "${red}[ERROR] Access Log for${blu} $domain ${red}is disabled!${end}"
+		exit 1
+	fi
+	
+	# WordPress Logs
+	if [[ -n $wp && $(is_parked $domain) == "true" ]]; then
+		echo "${red}[ERROR] Parked sites not allowed! ${dim}(WP debug should be used in main site)${end}"
+		exit 1
+	fi
+	
+	if [[ -n $wp && $(is_wp $domain $subfolder) == "true" ]]; then
+		iswpdeb=$( is_wp_debug $domain $subfolder )
+		
+		if [[ $wp == "on" ]]; then
+			if [[ $iswpdeb == "false" ]]; then
+				[[ $display == "off" ]] && dis="false" || dis="true"
+				wp_config_write $domain WP_DEBUG true $subfolder
+				wp_config_write $domain WP_DEBUG_DISPLAY $dis $subfolder
+				wp_config_write $domain WP_DEBUG_LOG true $subfolder
+				
+				[[ -n $env ]] && sudo site $domain -env=$env -skip-debug
+				
+				echo "${gre}WordPress Debug mode for${blu} $domain$subfolder ${gre}has been successfully enabled!${end}"
+			else
+				echo "${gre}WordPress Debug mode for${blu} $domain$subfolder ${gre}is already enabled!${end}"
+			fi
+		elif [[ $wp == "off" ]]; then
+			if [[ $iswpdeb == "true" ]]; then
+				wp_config_write $domain WP_DEBUG false $subfolder
+				wp_config_delete $domain WP_DEBUG_DISPLAY $subfolder
+				wp_config_delete $domain WP_DEBUG_LOG $subfolder
+				
+				[[ -n $env ]] && sudo site $domain -env=$env -skip-debug
+				
+				echo "${gre}WordPress Debug mode for${blu} $domain$subfolder ${gre}has been successfully disabled!${end}"
+			else
+				echo "${gre}WordPress Debug mode for${blu} $domain$subfolder ${gre}is already disabled!${end}"
+			fi
+		elif [[ $wp != "true" ]]; then
+			echo "${red}[ERROR] Invalid value for WP parameter!${end}"
+			exit 1
+		elif [[ -f /var/www/$domain/htdocs$subfolder/wp-content/debug.log && $iswpdeb == "true" ]]; then
+			[[ ! -s /var/www/$domain/htdocs$subfolder/wp-content/debug.log ]] && waiting_for_log
+			sudo tail -f --lines=$clines /var/www/$domain/htdocs$subfolder/wp-content/debug.log
+		elif [[ $iswpdeb != "true" ]]; then
+			echo "${red}[ERROR] WordPress Debug Mode is not enabled!${end}"
+			exit 1
+		else
+			echo "${red}[ERROR] WordPress log file not found or still empty!${end}"
+			exit 1
+		fi
+		
+	elif [[ -n $wp ]]; then
+		echo "${red}[ERROR] WordPress configuration file not found!${end}"
+		exit 1
+	
+	# Access and error logs
+	elif [[ -n $error && -f /var/log/nginx/$domain.error.log ]]; then
+		[[ ! -s /var/log/nginx/$domain.error.log ]] && waiting_for_log
+		sudo tail -f --lines=$clines /var/log/nginx/$domain.error.log
+	elif [[ -f /var/log/nginx/$domain.access.log && -z $error && -z $wp ]]; then
+		[[ ! -s /var/log/nginx/$domain.access.log ]] && waiting_for_log
+		sudo tail -f --lines=$clines /var/log/nginx/$domain.access.log
+	else
+		echo "${red}[ERROR] Log file not found!${end}"
+		exit 1
+	fi
+
+elif [[ -n $domain && ! -f /etc/nginx/sites-available/$domain ]]; then
+	echo "${red}[ERROR] Domain not found!${end}"
+	exit 1
+
+elif [[ -z $domain && ( -n $error || $empty_param == "true" ) ]]; then
+	# Check if Access Log is enabled
+	check_for_nginx
+	islog=$( grep -F "access_log off;" /etc/nginx/nginx.conf )
+	if [[ -z $error && -z $1 && -n $islog ]]; then
+		echo "${red}[ERROR] Access Log (global) is disabled!${end}"
+		exit 1
+	fi
+	
+	if [[ -n $error && -f /var/log/nginx/error.log ]]; then
+		sudo tail -f --lines=$clines /var/log/nginx/*error.log
+	elif [[ -f /var/log/nginx/access.log && -z $1 ]]; then
+		sudo tail -f --lines=$clines /var/log/nginx/*access.log
+	else
+		echo "${red}[ERROR] Please, enter a valid option! ${end}"
+		exit 1
+	fi
+	
+else
+	echo "${red}[ERROR] Please, enter a valid option! ${end}"
+	exit 1
+fi
+
+api-events_update lge

@@ -1,0 +1,40 @@
+# Webinoly Admin-Tools NGINX CONFIGURATION
+
+# WebinolyNginxServerStart
+server {
+	listen 22222 default_server deferred;
+	listen [::]:22222 default_server;
+
+	access_log   /var/log/nginx/22222.access.log we_log;
+	error_log    /var/log/nginx/22222.error.log;
+
+	root /var/www/22222/htdocs;
+	index index.php index.htm index.html;
+	
+	autoindex on;
+	
+	include common/auth.conf;
+	include common/acl.conf;
+	include common/php.conf;
+	include common/locations.conf;
+
+	# Status pages
+	location = /nginx_status {
+		stub_status on;
+		access_log off;
+	}
+	location ~ ^/(status|ping)$ {
+		try_files $uri =404;
+		include fastcgi_params;
+		fastcgi_pass php;
+	}
+
+	# phpMyAdmin protection
+	location ~ ^/pma/(libraries|templates) {
+		autoindex off;
+		deny all;
+		access_log off;
+		log_not_found off;
+	}
+}
+# WebinolyNginxServerEnd

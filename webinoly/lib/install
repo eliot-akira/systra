@@ -1,0 +1,590 @@
+#!/bin/bash
+source /opt/webinoly/lib/general
+
+readonly cores=$(grep ^processor /proc/cpuinfo | wc -l)
+readonly swapm=$(($(grep SwapTotal /proc/meminfo | cut -f 2 -d ':' | tr -d ' ' | cut -f 1 -d 'k')/1024))
+readonly swap=$(($swapm/1000))
+readonly ramb=$(($(grep MemTotal /proc/meminfo | cut -f 2 -d ':' | tr -d ' ' | cut -f 1 -d 'k')/1024))
+[[ $(($ramb%1000)) -gt 700 ]] && readonly ram=$((($ramb/1000)+1)) || readonly ram=$(($ramb/1000))
+
+
+set_timezone() {
+	if [[ -n $(conf_read timezone) ]] && grep -Fxq $(conf_read timezone) /opt/webinoly/lib/timezone.dat; then
+		sudo timedatectl set-timezone $(conf_read timezone)
+		# It's not compatible with multi-php feature.
+		if [[ $(conf_read php) == "true" ]]; then
+			sudo sed -i "/date.timezone =/c\date.timezone = $(conf_read timezone)" /etc/php/$(conf_read php-ver)/fpm/php.ini
+			# Don't reload if running inside php-optim process.
+			[[ $(conf_read status-api) != "ip3" ]] && sudo systemctl reload php$(conf_read php-ver)-fpm
+		fi
+		echo "${gre}Timezone: $(conf_read timezone) ${end}"
+	else
+		conf_delete timezone
+		echo "${red}Timezone not found or not valid!${end}"
+		exit 1
+	fi
+}
+
+
+linux_optim() {
+	api-events_update in4
+	if [[ $(conf_read linux-optim) == "true" ]]; then
+		return
+	fi
+	
+	if [[ -n $(conf_read fd-ratio) && $(conf_read fd-ratio) =~ ^[0-9]+$ && $(conf_read fd-ratio) -le "100" ]]; then
+		local fdratio=$(conf_read fd-ratio)
+	else
+		local fdratio="30"
+	fi
+	if [[ -n $(conf_read nginx-fd-ratio) && $(conf_read nginx-fd-ratio) =~ ^[0-9]+$ && $(conf_read nginx-fd-ratio) -le "100" ]]; then
+		local nginxfdratio=$(conf_read nginx-fd-ratio)
+	else
+		local nginxfdratio="65"
+	fi
+	if [[ -n $(conf_read max-mb-uploads) && $(conf_read max-mb-uploads) =~ ^[0-9]+$ ]]; then
+		local maxuploads=$(conf_read max-mb-uploads)
+	else
+		local maxuploads="50"
+	fi
+
+	local newfd=$(($ramb*$fdratio*10))
+	local nginxfd=$((($newfd*$nginxfdratio)/100))
+	local cachefd=$(($nginxfd/3))
+	local cacheram=$(($nginxfd/1000))
+	
+	[ -d /etc/systemd/system/nginx.service.d ] || sudo mkdir /etc/systemd/system/nginx.service.d
+	[ -f /etc/systemd/system/nginx.service.d/nofile_limit.conf ] || sudo touch /etc/systemd/system/nginx.service.d/nofile_limit.conf
+	sudo echo "[Service]
+LimitNOFILE=$nginxfd" >> /etc/systemd/system/nginx.service.d/nofile_limit.conf
+	
+	sudo sed -i "/worker_rlimit_nofile/c \worker_rlimit_nofile $nginxfd;" /etc/nginx/nginx.conf
+	sudo sed -i "/client_max_body_size/c \	client_max_body_size ${maxuploads}m;" /etc/nginx/nginx.conf
+	sudo sed -i "/open_file_cache max/c \	open_file_cache max=$cachefd inactive=5m;" /etc/nginx/nginx.conf
+	sudo sed -i "/fastcgi_cache_path/c \fastcgi_cache_path /run/nginx-cache levels=1:2 keys_zone=WORDPRESS:50m max_size=${cacheram}m inactive=7d;" /etc/nginx/conf.d/fastcgi.conf
+	echo "tmpfs	/run	tmpfs	nodev,nosuid,size=25%,mode=755	0	0" >> /etc/fstab
+		
+	# sudo cat /proc/$(cat /run/nginx.pid)/limits   -  ver los recursos actuales del proceso main de nginx
+	# sudo ps aux | grep nginx  ---  ver todos lo procesos corriendo con nginx user
+	[[ $newfd -gt $(ulimit -Hn) ]] && rootfd=$newfd || rootfd=$(ulimit -Hn)
+	sudo sed -i "/End of file/i \# WebinolyStart - Don't delete" /etc/security/limits.conf
+	sudo sed -i "/End of file/i \root	-	nofile	${rootfd}" /etc/security/limits.conf
+	sudo sed -i "/End of file/i \*	-	nofile	${newfd}" /etc/security/limits.conf
+	sudo sed -i "/End of file/i \# WebinolyEnd" /etc/security/limits.conf
+
+	sudo cat /opt/webinoly/templates/general/sysctl >> /etc/sysctl.conf
+	sudo sed -i "/fs.file-max =/c \ fs.file-max = ${newfd}" /etc/sysctl.conf
+	sudo sed -i "/vm.max_map_count =/c \ vm.max_map_count = ${newfd}" /etc/sysctl.conf
+	sudo modprobe tcp_bbr
+	
+	# Default is 65M, if RAM >= 3Gb take 3%, and >= 32Gb only 2%
+	if [[ $ram -gt 30 ]]; then
+		sudo sed -i "/vm.min_free_kbytes =/c \ vm.min_free_kbytes = $(($ramb*20))" /etc/sysctl.conf
+	elif [[ $ram -gt 2 ]]; then
+		sudo sed -i "/vm.min_free_kbytes =/c \ vm.min_free_kbytes = $(($ramb*30))" /etc/sysctl.conf
+	fi
+	
+	swap_create
+	set_timezone &
+	
+	sudo sysctl -p -q
+	sudo mount -o remount tmpfs
+	sudo systemctl daemon-reload
+	sudo kill $(cat /run/nginx.pid)
+	conf_write linux-optim true
+	sudo service nginx start
+	api-events_update in7
+}
+
+
+linux_purge() {
+	if [[ $(conf_read linux-optim) == "true" ]]; then
+		api-events_update pn7
+		sudo sed -i '/WebinolyStart/,/WebinolyEnd/{/.*/d}' /etc/security/limits.conf
+		sudo sed -i '/WebinolyStart/,/WebinolyEnd/{/.*/d}' /etc/sysctl.conf
+		sudo rm -rf /etc/systemd/system/nginx.service.d
+		sudo sed -i '\/run/d' /etc/fstab
+		
+		[[ -z $server_reset || $recalculate == "on" ]] && swap_delete
+		
+		sudo sysctl -p -q
+		sudo mount -o remount tmpfs
+		sudo systemctl daemon-reload
+		conf_write linux-optim purged
+		api-events_update pn8
+	fi
+}
+
+
+messagend_install() {
+	local ROOT_PW=$( echo $(conf_read mysql-root) | openssl enc -d -a -salt )
+	local ADMIN_PW=$( echo $(conf_read mysql-admin) | openssl enc -d -a -salt )
+	
+	echo ""
+	echo "${gre}"
+	echo "****************************************************************************"
+	echo "******${bol}            INSTALLATION HAS FINISHED SUCCESSFULLY              ${end}${gre}******"
+	echo "****************************************************************************"
+	echo "********      Save your DB access password in a secure place:       ********"
+	echo "******${dim}      root: ${ROOT_PW}       admin: ${ADMIN_PW}      ${end}${gre}******"
+	echo "****************************************************************************"
+	echo "${end}"
+}
+
+
+nginx_install() {
+	api-events_update in1
+	pre_install
+	if [[ ($(conf_read nginx-ppa) == "mainline" || $nginx == "mainline") && $nginx != "stable" ]]; then
+		echo | sudo add-apt-repository ppa:ondrej/nginx-mainline
+		conf_write nginx-ppa mainline
+	else
+		echo | sudo add-apt-repository ppa:ondrej/nginx
+		conf_write nginx-ppa stable
+	fi
+	pre_install
+	sudo apt -y install nginx
+
+	if [[ $(conf_read login-www-data) == "true" ]]; then
+		sudo chown -R www-data:www-data /var/www
+		sudo chown root:root /var/www
+	fi
+
+	sudo cp -p /etc/nginx/sites-available/default /opt/webinoly/templates/source/
+	sudo cp -p /etc/nginx/nginx.conf /opt/webinoly/templates/source/
+	sudo systemctl enable nginx
+	sudo nginx -t && sudo service nginx start
+	conf_write nginx true
+	echo "${gre}Nginx has been installed successfully! ${end}"
+	api-events_update in2
+}
+
+
+php_install() {
+	api-events_update ip1
+	if [[ -n $(conf_read php-ver) && $(check_php_version $(conf_read php-ver)) == "true" ]]; then
+		echo "${gre}PHP version '$(conf_read php-ver)' is set as default.${end}"
+	else
+		# Default PHP version
+		conf_write php-ver 7.4
+	fi
+	local ver=$(conf_read php-ver)
+	
+	# Multi-PHP
+	if [[ $(conf_read multi-php) == "true" && -n $1 && $(check_php_version $1) == "true" && $(conf_read php) == "true" && $1 != $ver ]]; then
+		ver="$1"
+		echo "${gre}Multi-PHP version is enabled. PHP '$ver' will be installed!${end}"
+	elif [[ $(conf_read multi-php) != "true" && -n $1 ]]; then
+		echo "${red}[ERROR] Multi-PHP is not enabled! ${end}"
+		exit 1
+	elif [[ $(conf_read multi-php) == "true" && -n $1 ]]; then
+		echo "${red}[ERROR] Please, enter a valid PHP version or default PHP is not installed yet! ${end}"
+		exit 1
+	fi
+	
+	pre_install
+	if [[ $(conf_read php) != "true" ]]; then
+		# Fix ondrej issue - https://github.com/oerdnj/deb.sury.org/issues/56
+		sudo apt install -y language-pack-en-base
+		sudo LC_ALL=C.UTF-8 add-apt-repository -y ppa:ondrej/php
+	fi
+	pre_install
+	sudo apt -y install php${ver}-common php${ver}-cli php${ver}-fpm php${ver}-curl php${ver}-gd php${ver}-imap php${ver}-readline php${ver}-mysql php${ver}-mbstring php${ver}-bcmath php${ver}-mysql php${ver}-opcache php${ver}-zip php${ver}-xml php${ver}-soap php${ver}-imagick php${ver}-msgpack php${ver}-igbinary graphviz php-pear
+	
+	# Removed/deprecated in 7.4
+	[[ $ver =~ ^(7.2|7.3)$ ]] && sudo apt -y install php${ver}-recode
+	
+	def=$(conf_read php-ver)
+	if [[ $(conf_read php-v${def}) != "true" ]]; then
+		sudo cp -p /etc/php/$ver/fpm/php.ini /opt/webinoly/templates/source/
+		sudo cp -p /etc/php/$ver/fpm/pool.d/www.conf /opt/webinoly/templates/source/
+		sudo cp -p /etc/php/$ver/fpm/php-fpm.conf /opt/webinoly/templates/source/
+	fi
+	
+	conf_write php true
+	conf_write php-v$ver true
+	echo "${gre}PHP has been installed successfully! ${end}"
+	api-events_update ip2
+}
+
+
+mysql_install() {
+	api-events_update im1
+	pre_install
+	[[ $(conf_read mysql-client) != "true" ]] && mysql_client_install
+	
+	# debconf-utils for unattended scripts
+	#  debconf-get-selections | grep phpmyadmin   <<-- list conf variables
+	sudo apt -y install debconf-utils
+	
+	# Generate mysql user passwords
+	if [[ -z $(conf_read mysql-root) && -z $(conf_read mysql-admin) ]]; then
+		local AUTOGENPASS_ROOT=`pwgen -s -1 16`
+		local AUTOGENPASS_ADMIN=`pwgen -s -1 16`
+		local enc_pass_root=$( echo $AUTOGENPASS_ROOT | openssl enc -a -salt )
+		local enc_pass_admin=$( echo $AUTOGENPASS_ADMIN | openssl enc -a -salt )
+		conf_write mysql-root $enc_pass_root
+		conf_write mysql-admin $enc_pass_admin
+	else
+		# In case of re-installation after purge with keep-data option.
+		local AUTOGENPASS_ROOT=$( echo $(conf_read mysql-root) | openssl enc -d -a -salt )
+		local AUTOGENPASS_ADMIN=$( echo $(conf_read mysql-admin) | openssl enc -d -a -salt )
+	fi
+	
+	# MariaDB Installation
+	echo "mariadb-server-10.5 mysql-server/root_password password $AUTOGENPASS_ROOT" | debconf-set-selections
+	echo "mariadb-server-10.5 mysql-server/root_password_again password $AUTOGENPASS_ROOT" | debconf-set-selections
+	sudo apt -y install mariadb-server
+	
+	conf_write mysql true
+	
+	# Binaly logs disabled by default and Error logging not in syslog (syslog is default).
+	mysql_default_cnf
+	sudo log -mysql=binary -disable > /dev/null 2>&1
+
+	#Instead of mysql_secure_installation we do this: (same but manually, because not acept unattended)
+	sudo mysql --user=root -p$AUTOGENPASS_ROOT <<_EOF_
+ALTER USER 'root'@'localhost' IDENTIFIED BY '${AUTOGENPASS_ROOT}';
+DELETE FROM mysql.user WHERE User='';
+DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
+DROP DATABASE IF EXISTS test;
+DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
+CREATE USER IF NOT EXISTS 'admin'@'localhost' IDENTIFIED BY '${AUTOGENPASS_ADMIN}';
+GRANT ALL PRIVILEGES ON *.* TO 'admin'@'localhost' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+_EOF_
+	
+	echo "${gre}MySQL has been installed successfully! ${end}"
+	api-events_update im4
+}
+
+
+#NGINX OPTIM
+nginx_optim() {
+	api-events_update in3
+	sudo cp -R /opt/webinoly/templates/nginx/common /etc/nginx/common
+	sudo cp -R /opt/webinoly/templates/nginx/conf.d/* /etc/nginx/conf.d/
+
+	sudo cat /opt/webinoly/templates/nginx/nginx.conf > /etc/nginx/nginx.conf
+	
+	# Remove it, then add it again to prevent multiple # for each server-reset
+	sudo sed -i '/ SERVER_NAME /s/#//' /etc/nginx/fastcgi_params
+	sudo sed -i '/ SERVER_NAME /s/^/#/' /etc/nginx/fastcgi_params
+	
+	echo '# WebinolyCustom
+fastcgi_param  SCRIPT_FILENAME    $request_filename;
+fastcgi_param  SERVER_NAME        $host;
+fastcgi_param  HTTP_HOST          $http_host;
+fastcgi_param  HTTP_PROXY         "";
+fastcgi_param  HTTP_ACCEPT_ENCODING "";
+# WebinolyCustomEnd' >> /etc/nginx/fastcgi_params
+	
+	# Current original user HOME even with sudo (root) - This script always run with sudo, so $HOME is always /root
+	# https://askubuntu.com/questions/1186999/how-does-sudo-handle-home-differently-since-19-10
+	local current_home=$(eval echo ~${SUDO_USER:-${USER}}) 
+	
+	# Create Direct Access for easy navigation
+	[ -L $current_home/sites-available ] || ln -s /etc/nginx/sites-available $current_home
+	[ -L $current_home/www ] || ln -s /var/www $current_home
+	
+	# www-data sftp default uploads permissions 755 and 644, instead of 775 and 664.
+	sudo sed -i '/USERGROUPS_ENAB/c \USERGROUPS_ENAB no' /etc/login.defs
+	
+	if [[ ! -f /etc/ssl/dhparam.pem ]]; then
+		sudo openssl dhparam -out /etc/ssl/dhparam.pem 2048
+		sudo chmod 600 /etc/ssl/dhparam.pem
+	fi
+
+	if [[ ! -d /etc/nginx/apps.d ]]; then
+		sudo mkdir -p /etc/nginx/apps.d
+		sudo chmod 755 /etc/nginx/apps.d
+	fi
+	
+	echo "${gre}Wait while Webinoly optimize your Ubuntu Operating System...${end}"
+	linux_optim
+
+	# Check for dynamic variables.
+	[[ $(conf_read global-access-log-off) == "purged" ]] && sudo log -only-error=off || sudo log -only-error=on
+	[[ -n $(conf_read fastcgi-conf) ]] && sudo webinoly -config-cache=[$(conf_read fastcgi-conf)]
+	[[ -n $(conf_read header-referrer) ]] && sudo webinoly -header-referrer=$(conf_read header-referrer)
+	[[ -n $(conf_read header-hsts) ]] && sudo webinoly -header-hsts=$(conf_read header-hsts)
+	[[ -s /opt/webinoly/templates/source/csp_webinoly.data ]] && sudo webinoly -header-csp=reload
+
+	conf_write server-version $svr_version
+	conf_write nginx-optim true
+	api-events_update in8
+}
+
+
+
+# PHP OPTIM
+php_optim() {
+	api-events_update ip3
+	
+	# Check for dynamic variables
+	[[ -n $1 ]] && ver="$1" || ver=$(conf_read php-ver)
+	[[ -n $(conf_read php-max-child) && $(conf_read php-max-child) =~ ^[0-9]+$ && $(conf_read php-max-child) -gt 2 ]] && local maxchil=$(conf_read php-max-child)
+	[[ -n $(conf_read php-max-mem) && $(conf_read php-max-mem) =~ ^[0-9]+$ && $(conf_read php-max-mem) -gt 0 ]] && local maxmem=$(conf_read php-max-mem) || local maxmem=192
+	[[ -n $(conf_read php-max-time) && $(conf_read php-max-time) =~ ^[0-9]+$ && $(conf_read php-max-time) -gt 0 ]] && local maxtime=$(conf_read php-max-time) || local maxtime=300
+	[[ -n $(conf_read max-mb-uploads) && $(conf_read max-mb-uploads) =~ ^[0-9]+$ && $(conf_read max-mb-uploads) -gt 0 ]] && local maxup=$(conf_read max-mb-uploads) || local maxup=50
+	
+	sudo sed -i "/memory_limit =/c\memory_limit = ${maxmem}M" /etc/php/$ver/fpm/php.ini
+	sudo sed -i "/max_execution_time =/c\max_execution_time = ${maxtime}" /etc/php/$ver/fpm/php.ini
+	sudo sed -i "/upload_max_filesize =/c\upload_max_filesize = ${maxup}M" /etc/php/$ver/fpm/php.ini
+	sudo sed -i "/post_max_size =/c\post_max_size = ${maxup}M" /etc/php/$ver/fpm/php.ini
+	sudo sed -i "/max_input_vars =/c\max_input_vars = 3000" /etc/php/$ver/fpm/php.ini
+	sudo sed -i '/max_file_uploads =/c\max_file_uploads = 20' /etc/php/$ver/fpm/php.ini
+	sudo sed -i '/session.cookie_httponly =/c\session.cookie_httponly = 1' /etc/php/$ver/fpm/php.ini
+	sudo sed -i '/expose_php =/c\expose_php = Off' /etc/php/$ver/fpm/php.ini
+	
+	sudo sed -i "/opcache.memory_consumption=/c\opcache.memory_consumption=${maxmem}" /etc/php/$ver/fpm/php.ini
+	sudo sed -i '/opcache.interned_strings_buffer=/c\opcache.interned_strings_buffer=8' /etc/php/$ver/fpm/php.ini
+	sudo sed -i '/opcache.max_accelerated_files=/c\opcache.max_accelerated_files=50000' /etc/php/$ver/fpm/php.ini
+	sudo sed -i '/opcache.enable_cli=/c\opcache.enable_cli=1' /etc/php/$ver/fpm/php.ini
+	sudo sed -i '/opcache.enable=/c\opcache.enable=1' /etc/php/$ver/fpm/php.ini
+	
+	set_timezone &
+	
+	if [[ -z $maxchil ]]; then	
+		if [[ $ram  =~ ^[0-9]+$ && ( $ram -gt 3 || $cores -gt 2 ) ]]; then
+			local maxchil=$((5*$ram*$cores))
+			[[ $maxchil -gt 100 ]] && maxchil=100
+		elif [[ $ram  =~ ^[0-9]+$ && $ram -gt 0 ]]; then
+			local maxchil=10
+		else
+			local maxchil=6
+		fi
+	fi
+	
+	[[ $(conf_read php-pm) =~ ^(static|ondemand)$ ]] && local phpm=$(conf_read php-pm) || local phpm="dynamic"
+	[[ -z $(conf_read php-pm) && $ram -gt 6 ]] && local phpm="static"
+	
+	sudo sed -i "/pm =/c\pm = $phpm" /etc/php/$ver/fpm/pool.d/www.conf
+	sudo sed -i "/pm.max_children =/c\pm.max_children = $maxchil" /etc/php/$ver/fpm/pool.d/www.conf
+	sudo sed -i "/pm.start_servers =/c\pm.start_servers = $(($maxchil/3))" /etc/php/$ver/fpm/pool.d/www.conf
+	sudo sed -i "/pm.min_spare_servers =/c\pm.min_spare_servers = $(($maxchil/3))" /etc/php/$ver/fpm/pool.d/www.conf
+	sudo sed -i "/pm.max_spare_servers =/c\pm.max_spare_servers = $((2*($maxchil/3)))" /etc/php/$ver/fpm/pool.d/www.conf
+	sudo sed -i "/request_terminate_timeout =/c\request_terminate_timeout = ${maxtime}" /etc/php/$ver/fpm/pool.d/www.conf
+	sudo sed -i '/pm.max_requests =/c\pm.max_requests = 1000' /etc/php/$ver/fpm/pool.d/www.conf
+	sudo sed -i '/pm.status_path =/c\pm.status_path = /status' /etc/php/$ver/fpm/pool.d/www.conf
+	sudo sed -i '/ping.path =/c\ping.path = /ping' /etc/php/$ver/fpm/pool.d/www.conf
+
+	if [[ $(conf_read multi-php) == "true" ]]; then
+		[[ $ver == 8.0 ]] && sudo sed -i '/listen = /c\listen = 127.0.0.1:9001' /etc/php/$ver/fpm/pool.d/www.conf
+		[[ $ver == 7.4 ]] && sudo sed -i '/listen = /c\listen = 127.0.0.1:9000' /etc/php/$ver/fpm/pool.d/www.conf
+		[[ $ver == 7.3 ]] && sudo sed -i '/listen = /c\listen = 127.0.0.1:9002' /etc/php/$ver/fpm/pool.d/www.conf
+		[[ $ver == 7.2 ]] && sudo sed -i '/listen = /c\listen = 127.0.0.1:9003' /etc/php/$ver/fpm/pool.d/www.conf
+	else
+		sudo sed -i '/listen = /c\listen = 127.0.0.1:9000' /etc/php/$ver/fpm/pool.d/www.conf
+	fi
+	
+	[[ $(conf_read php-tool) == "true" && -n $(conf_read redis-max-mem) ]] && redis_optim
+	conf_write php-optim true
+	sudo systemctl restart php${ver}-fpm
+	api-events_update ip4
+}
+
+
+nginx_tool_site() {
+	# Port 22222 tools site
+	sudo site $(conf_read tools-port) -php > /dev/null 2>&1
+	sudo cp /opt/webinoly/templates/nginx/22222 /etc/nginx/sites-available/$(conf_read tools-port)
+	sudo sed -i "s/22222/$(conf_read tools-port)/g"  /etc/nginx/sites-available/$(conf_read tools-port)
+	sudo nginx -t && sudo service nginx reload
+	
+	# Robots.txt file in case someone remove HTTP Auth
+	sudo touch /var/www/$(conf_read tools-port)/htdocs/robots.txt
+	echo '# Just in case someone remove HTTP Auth protection.
+Disallow: /' > /var/www/$(conf_read tools-port)/htdocs/robots.txt
+	sudo chown -R www-data:www-data /var/www/$(conf_read tools-port)/htdocs/robots.txt
+	sudo chmod 644 /var/www/$(conf_read tools-port)/htdocs/robots.txt
+}
+
+
+nginx_tool() {
+	api-events_update in9
+	[[ -z $(conf_read tools-port) ]] && conf_write tools-port 22222
+	[[ $(conf_read php) == "true" ]] && nginx_tool_site
+	# in case php was installed before nginx
+	[[ $(conf_read php-tool) == "true" && ! -f /var/www/$(conf_read tools-port)/htdocs/php/index.php ]] && php_tool_site
+
+	# Install LetsEncrypt
+	[[ $(check_osname) == "bionic" ]] && echo | sudo add-apt-repository ppa:certbot/certbot
+	pre_install
+	sudo apt -y install certbot
+	
+	# Instalar Duply & Duplicity
+	[[ $(check_osname) == "bionic" ]] && sudo apt -y install python-boto duplicity duply || sudo apt -y install python3-boto3 duplicity duply
+	
+	conf_write nginx-tool true
+	api-events_update in10
+}
+
+
+php_tool_site() {
+	api-events_update ip6
+	# Status pages
+	sudo touch /var/www/$(conf_read tools-port)/htdocs/ping
+	sudo touch /var/www/$(conf_read tools-port)/htdocs/status
+	sudo touch /var/www/$(conf_read tools-port)/htdocs/nginx_status	
+	
+	#PHP info site
+	sudo mkdir -p /var/www/$(conf_read tools-port)/htdocs/php
+	sudo touch /var/www/$(conf_read tools-port)/htdocs/php/index.php
+	sudo echo '<?php phpinfo(); ?>' >> /var/www/$(conf_read tools-port)/htdocs/php/index.php
+	api-events_update ip7
+}
+
+
+redis_optim() {
+	[[ -n $(conf_read redis-max-mem) && $(conf_read redis-max-mem) =~ ^[0-9]+$ && $(conf_read redis-max-mem) -le 100 ]] && per=$(conf_read redis-max-mem) || per=10
+	local maxmem=$((($(grep MemTotal /proc/meminfo | cut -f 2 -d ':' | tr -d ' ' | cut -f 1 -d 'k')*$per)/100000))
+	sudo sed -i "/# maxmemory <bytes>/c\maxmemory ${maxmem}mb" /etc/redis/redis.conf
+	sudo sed -i "/^maxmemory /c\maxmemory ${maxmem}mb" /etc/redis/redis.conf
+	sudo sed -i "/# maxmemory-policy/c\maxmemory-policy allkeys-lfu" /etc/redis/redis.conf
+	sudo service redis-server restart
+}
+
+
+php_tool() {
+	api-events_update ip5
+	local ver=$(conf_read php-ver)
+	
+	# in case nginx was installed before php
+	[[ $(conf_read nginx-tool) == "true" && ! -f /etc/nginx/sites-available/$(conf_read tools-port) ]] && nginx_tool_site
+	[[ $(conf_read nginx) == "true" ]] && php_tool_site
+
+	# Redis (Object Cache)
+	echo | sudo add-apt-repository ppa:chris-lea/redis-server
+	pre_install
+	sudo apt -y install redis-server php${ver}-redis
+	sudo systemctl enable redis-server
+	
+	# Memcached (Object Cache)
+	sudo apt -y install php${ver}-memcached php${ver}-memcache memcached
+	
+	# Postfix mail
+	echo "postfix postfix/main_mailer_type        select  Internet Site" | debconf-set-selections
+	echo "postfix postfix/mailname        string  $hostname" | debconf-set-selections
+	sudo apt -y install postfix
+	sudo cp -p /etc/postfix/main.cf /opt/webinoly/templates/source/
+	sudo sed -i '/mydestination =/c \mydestination = localhost' /etc/postfix/main.cf
+
+	redis_optim
+	sudo service php*-fpm reload
+	sudo service postfix restart
+	conf_write php-tool true
+	api-events_update ip8
+}
+
+
+mysql_tool() {
+	api-events_update im5
+	
+	sudo mkdir -p /var/www/$(conf_read tools-port)/htdocs/pma
+	sudo wget --timeout=15 -t 1 -qrO /var/www/$(conf_read tools-port)/htdocs/pma.tar.xz https://www.phpmyadmin.net/downloads/phpMyAdmin-latest-all-languages.tar.xz
+	
+	if [[ -s /var/www/$(conf_read tools-port)/htdocs/pma.tar.xz ]]; then	
+		sudo tar -xf /var/www/$(conf_read tools-port)/htdocs/pma.tar.xz -C /var/www/$(conf_read tools-port)/htdocs/pma
+		sudo mv /var/www/$(conf_read tools-port)/htdocs/pma/phpMyAdmin-*-all-languages/* /var/www/$(conf_read tools-port)/htdocs/pma/
+		sudo rm -rf /var/www/$(conf_read tools-port)/htdocs/pma/phpMyAdmin-*-all-languages
+		sudo rm -rf /var/www/$(conf_read tools-port)/htdocs/pma/test
+		sudo rm -rf /var/www/$(conf_read tools-port)/htdocs/pma/setup
+		sudo rm /var/www/$(conf_read tools-port)/htdocs/pma.tar.xz
+
+		sudo cp /var/www/$(conf_read tools-port)/htdocs/pma/config.sample.inc.php /var/www/$(conf_read tools-port)/htdocs/pma/config.inc.php
+		sudo sed -i "/blowfish_secret/c \$cfg['blowfish_secret'] = '$(pwgen -s -1 32)';" /var/www/$(conf_read tools-port)/htdocs/pma/config.inc.php
+		sudo chown -R www-data:www-data /var/www/$(conf_read tools-port)/htdocs/pma
+		
+		conf_write mysql-tool true
+		echo "${gre}phpMyAdmin has been installed successfully! ${end}"
+	else
+		echo "${red}[ERROR] Downloading phpMyAdmin failed!${end}"
+	fi
+	
+	api-events_update im6
+}
+
+
+swap_delete() {
+	if [[ -n $swap && $swap =~ ^[0-9]+$ && $(conf_read swap-owner) == "webinoly" ]]; then
+		api-events_update pn9
+		sudo swapoff -a -v
+		sudo rm -rf /swapfile
+		if [[ ! -f /swapfile ]]; then
+			sudo sed -i '/\/swapfile/d' /etc/fstab
+			conf_delete swap-owner
+			api-events_update pn10
+		else
+			echo "${dim}SWAP file is busy or can't be removed!${end}"
+		fi
+	fi
+}
+
+
+swap_create() {
+	# Need a fresh value here, not use the global var.
+	local sw=$(($(grep SwapTotal /proc/meminfo | cut -f 2 -d ':' | tr -d ' ' | cut -f 1 -d 'k')/1024000))
+
+	# https://help.ubuntu.com/community/SwapFaq
+	if [[ -z $sw || $sw == "0" ]]; then
+		api-events_update in5
+		if [[ -n $(conf_read swap-mem) && $(conf_read swap-mem) =~ ^[0-9]+$ ]]; then
+			local newswap=$(conf_read swap-mem)
+		elif [[ $ram -le 2 ]]; then
+			local newswap="1"
+		elif [[ $ram -le 6 ]]; then
+			local newswap="2"
+		elif [[ $ram -le 12 ]]; then
+			local newswap="3"
+		elif [[ $ram -le 16 ]]; then
+			local newswap="4"
+		elif [[ $ram -le 24 ]]; then
+			local newswap="5"
+		elif [[ $ram -le 32 ]]; then
+			local newswap="6"
+		elif [[ $ram -le 64 ]]; then
+			local newswap="8"
+		elif [[ $ram -le 128 ]]; then
+			local newswap="11"
+		elif [[ $ram -le 256 ]]; then
+			local newswap="16"
+		elif [[ $ram -le 512 ]]; then
+			local newswap="23"
+		elif [[ $ram -le 1024 ]]; then
+			local newswap="32"
+		elif [[ $ram -le 2048 ]]; then
+			local newswap="46"
+		elif [[ $ram -le 4096 ]]; then
+			local newswap="64"
+		elif [[ $ram -le 8192 ]]; then
+			local newswap="91"
+		elif [[ $ram -gt 8192 ]]; then
+			local newswap="100"
+		
+		else
+			local newswap="0"
+		fi
+
+		if [[ -z $newswap || $newswap == 0 ]]; then
+			echo "${red}[ERROR] Webinoly could not create a new SWAP file! ${end}"
+		else
+			# Create SWAP Partition
+			sudo dd if=/dev/zero of=/swapfile bs=${newswap}M count=1024
+			sudo echo "/swapfile none swap sw 0 0" >> /etc/fstab
+			
+			sudo chown root:root /swapfile
+			sudo chmod 0600 /swapfile
+			
+			sudo mkswap /swapfile
+			sudo swapon /swapfile
+
+			conf_write swap-owner webinoly
+			echo "${gre}A new SWAP file (${newswap}Gb) has been created! ${end}"
+		fi
+		api-events_update in6
+	else
+		[[ $(conf_read swap-owner) != "webinoly" ]] && conf_write swap-owner system
+		echo "${gre}SWAP file (${sw}Gb) detected!${end}"
+	fi
+}

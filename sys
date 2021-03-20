@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# Get absolute path this script is in, for example: /home/$USER/bin
+SCRIPTPATH=$(dirname $(readlink -f "$0"))
+
+if [ -f $SCRIPTPATH/"$@" ]; then
+  $SCRIPTPATH/"$@"
+else
+  echo -e "Unknown command: $@\n"
+  $SCRIPTPATH/help
+fi
