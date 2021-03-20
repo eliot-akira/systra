@@ -5,6 +5,8 @@ SCRIPTPATH=$(dirname $(readlink -f "$0"))
 
 echo -e "Installing system\n"
 
+cd ~
+
 if [ ! -f ~/.bash_aliases ]; then
 
   echo -e "Set up shell environment\n"
@@ -14,11 +16,15 @@ if [ ! -f ~/.bash_aliases ]; then
 
   mkdir -p ~/apps
   mkdir -p ~/bin
+
+  if [ -d ~/bin/systra ]; then
+    rm -rf ~/bin/systra
+  fi
+
   mv $SCRIPTPATH ~/bin/systra
   ln -s ~/bin/systra/sys ~/bin/sys
 
-  echo "Run: source ~/.profile"
-  echo "Then run: sys install"
+  echo -e "\nRun: source ~/.profile && sys install\n"
   exit
 fi
 
@@ -30,8 +36,7 @@ if [ ! -d ~/n ]; then
   sudo apt-get install build-essential
   curl -L https://git.io/n-install | bash
 
-  echo "Run: source ~/.profile"
-  echo "Then run: sys install"
+  echo -e "\nRun: source ~/.profile && sys install\n"
   exit
 fi
 
@@ -120,7 +125,7 @@ if [ ! -d /opt/webinoly ]; then
   sudo -u root bash -c 'echo -e "\nfs.inotify.max_user_watches=524288\n" >> /etc/sysctl.conf'
   sudo sysctl -p &> /dev/null
 
-  echo "Make note of the above credentials, then run: sys install"
+  echo -e "Make note of the above credentials, then run: sys install\n"
 
   exit
 fi
@@ -145,4 +150,4 @@ if [ ! -f ~/bin/wp ]; then
   mv wp-cli.phar ~/bin/wp
 fi
 
-echo "System installed."
+echo -e "\nSystem fully installed.\n"

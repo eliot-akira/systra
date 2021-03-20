@@ -6,6 +6,8 @@ SCRIPTPATH=$(dirname $(readlink -f "$0"))
 if [ -f $SCRIPTPATH/"$@" ]; then
   $SCRIPTPATH/"$@"
 else
-  echo -e "Unknown command: $@\n"
+  if [ ! -z "$1" ]; then
+    echo -e "Unknown command: $1\n"
+  fi
   $SCRIPTPATH/help
 fi
