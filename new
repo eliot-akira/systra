@@ -1,0 +1,41 @@
+#!/bin/bash
+
+if [ -z $1 ]; then
+  echo -e "Create a new site\n\nUsage: sys new [domain name]\n"
+  exit
+fi
+
+SCRIPTPATH=$(dirname $(readlink -f "$0"))
+. $SCRIPTPATH/common
+
+DOMAIN_NAME=$1
+SUBFOLDER=$2
+
+if [ -z "$SUBFOLDER" ]; then
+
+  echo "Creating site at $DOMAIN_NAME"
+  enter-when-ready
+
+  sudo site $DOMAIN_NAME -wp
+  sudo httpauth $DOMAIN_NAME -wp-admin=off &> /dev/null
+
+  ln -s ~/www/$DOMAIN_NAME/htdocs ~/apps/$DOMAIN_NAME
+
+  echo -e "\nSite installed at ~/apps/$DOMAIN_NAME"
+
+else
+
+  # Subfolder of existing site
+
+  echo "Creating child site at $DOMAIN_NAME/$SUBFOLDER"
+  enter-when-ready
+
+  if [ ! -L ~/apps/$DOMAIN_NAME ]; then
+    echo "Site not found: ~/apps/$DOMAIN_NAME"
+    exit
+  fi
+
+  sudo site $DOMAIN_NAME -subfolder=/$SUBFOLDER -wp
+  sudo httpauth $DOMAIN_NAME -subfolder=/$SUBFOLDER -wp-admin=off &> /dev/null
+
+fi

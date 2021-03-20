@@ -1,0 +1,10 @@
+#!/bin/bash
+
+alias www='sudo -u www-data'
+alias wp="sudo -u www-data /home/$USER/bin/wp"
+
+enter-when-ready() {
+  echo -n "\nPress enter when ready, or CTRL + C to stop the script.."
+  read
+  echo
+}

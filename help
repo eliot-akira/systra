@@ -1,3 +1,9 @@
 #!/bin/bash
 
-# TODO: List commands
+echo "Usage: sys [command]"
+echo
+echo "Available commands:"
+echo "  install                Install server features"
+echo "  new [domain name]      Create new site"
+echo "  delete [domain name]   Delete site"
+echo

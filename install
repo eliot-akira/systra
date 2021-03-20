@@ -3,9 +3,7 @@
 # Get absolute path this script is in, for example: /home/$USER/bin
 SCRIPTPATH=$(dirname $(readlink -f "$0"))
 
-echo -e "Installing system\n"
-
-cd ~
+echo -e "Installing server features\n"
 
 if [ ! -f ~/.bash_aliases ]; then
 
@@ -73,16 +71,15 @@ if [ ! -d /opt/webinoly ]; then
   echo -e "Install web server - Nginx, MariaDB/MySQL, PHP\n"
 
   # wget -qO weby qrok.es/wy && sudo bash weby 0
+  # sudo tar -xf $HOME/webinoly.tar -C /opt/webinoly
 
   ### Below based on weby script --->
 
   sudo mkdir -p /opt/webinoly
 
-  # sudo tar -xf $HOME/webinoly.tar -C /opt/webinoly
-
-  sudo cp -r $SCRIPTPATH/webinoly/lib /opt/webinoly
-  sudo cp -r $SCRIPTPATH/webinoly/plugins /opt/webinoly
-  sudo cp -r $SCRIPTPATH/webinoly/templates /opt/webinoly
+  sudo cp -r $SCRIPTPATH/assets/webinoly/lib /opt/webinoly
+  sudo cp -r $SCRIPTPATH/assets/webinoly/plugins /opt/webinoly
+  sudo cp -r $SCRIPTPATH/assets/webinoly/templates /opt/webinoly
 
   sudo mkdir -p /opt/webinoly/templates/source
   sudo find /opt/webinoly -type d -exec chmod 755 {} \;
@@ -148,6 +145,7 @@ if [ ! -f ~/bin/wp ]; then
   php wp-cli.phar --info
   chmod +x wp-cli.phar
   mv wp-cli.phar ~/bin/wp
+
 fi
 
 echo -e "\nSystem fully installed.\n"

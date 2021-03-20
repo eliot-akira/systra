@@ -3,8 +3,10 @@
 # Get absolute path this script is in, for example: /home/$USER/bin
 SCRIPTPATH=$(dirname $(readlink -f "$0"))
 
-if [ -f $SCRIPTPATH/"$@" ]; then
-  $SCRIPTPATH/"$@"
+echo -e "Systra - Server management script\n"
+
+if [ -f $SCRIPTPATH/"$1" ]; then
+  $SCRIPTPATH/"$1" "${@:2}"
 else
   if [ ! -z "$1" ]; then
     echo -e "Unknown command: $1\n"
