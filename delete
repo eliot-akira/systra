@@ -24,28 +24,29 @@ if [ -z "$SUBFOLDER" ]; then
 
   echo -e "\nSite deleted from ~/apps/$DOMAIN_NAME"
 
-else
-
-  # Subfolder of existing site
-
-  echo "Deleting child site at $DOMAIN_NAME/$SUBFOLDER"
-  enter-when-ready
-
-  PARENT_SITE_PATH=~/apps/$DOMAIN_NAME
-
-  if [ ! -L $PARENT_SITE_PATH ]; then
-    echo "Parent site not found: $PARENT_SITE_PATH"
-    exit
-  fi
-
-  CHILD_SITE_PATH=$PARENT_SITE_PATH/$SUBFOLDER
-
-  if [ ! -L $CHILD_SITE_PATH ]; then
-    echo "Site not found: $CHILD_SITE_PATH"
-    exit
-  fi
-
-  sudo site $DOMAIN_NAME -subfolder=/$SUBFOLDER -delete
-
-  echo -e "\nSite deleted from $CHILD_SITE_PATH"
+  exit
 fi
+
+
+# Subfolder of existing site
+
+echo "Deleting child site at $DOMAIN_NAME/$SUBFOLDER"
+enter-when-ready
+
+PARENT_SITE_PATH=~/apps/$DOMAIN_NAME
+
+if [ ! -L $PARENT_SITE_PATH ]; then
+  echo "Parent site not found: $PARENT_SITE_PATH"
+  exit
+fi
+
+CHILD_SITE_PATH=$PARENT_SITE_PATH/$SUBFOLDER
+
+if [ ! -L $CHILD_SITE_PATH ]; then
+  echo "Site not found: $CHILD_SITE_PATH"
+  exit
+fi
+
+sudo site $DOMAIN_NAME -subfolder=/$SUBFOLDER -delete
+
+echo -e "\nSite deleted from $CHILD_SITE_PATH"
