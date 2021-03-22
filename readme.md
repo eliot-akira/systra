@@ -8,6 +8,10 @@ Server management script based on [Webinoly](https://webinoly.com/en/)
 wget -O - https://github.com/eliot-akira/systra/tarball/master | tar xz --one-top-level=systra --strip-components 1 && ./systra/sys install
 ```
 
+## Use
+
+The command `sys` will be available after installation. Run it to see help screen.
+
 ## Develop
 
 Update bundled Webinoly library
