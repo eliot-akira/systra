@@ -3,7 +3,9 @@
 echo "Usage: sys [command]"
 echo
 echo "Available commands:"
-echo "  install                Install server features"
-echo "  new [domain name]      Create new site"
-echo "  delete [domain name]   Delete site"
+echo "  install                   Install server features"
+echo "  new [domain]              Create new site"
+echo "  new [domain] [folder]     Create new child site"
+echo "  delete [domain]           Delete site"
+echo "  delete [domain] [folder]  Delete child site"
 echo

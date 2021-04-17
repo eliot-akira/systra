@@ -3,11 +3,12 @@
 # Get absolute path this script is in, for example: /home/$USER/bin
 SCRIPTPATH=$(dirname $(readlink -f "$0"))
 
-echo -e "Installing server features\n"
+echo -e "Installing system features\n"
 
 if [ ! -f ~/.bash_aliases ]; then
 
-  echo -e "Set up shell environment\n"
+  echo -e "Set up shell environment"
+  enter-when-ready
 
   cp $SCRIPTPATH/assets/.profile ~
   cp $SCRIPTPATH/assets/.bash_aliases ~
@@ -28,7 +29,8 @@ fi
 
 if [ ! -d ~/n ]; then
 
-  echo -e "Install Node.js - JavaScript runtime\n"
+  echo -e "Install Node.js - JavaScript runtime"
+  enter-when-ready
 
   sudo apt-get update
   sudo apt-get install build-essential
@@ -40,14 +42,16 @@ fi
 
 if [ ! -f ~/n/bin/yarn ]; then
 
-  echo -e "Install Yarn - Package manager for Node.js\n"
+  echo -e "Install Yarn - Package manager for Node.js"
+  enter-when-ready
 
   npm install --global yarn
 fi
 
 if [ ! -f ~/.yarn/bin/pm2 ]; then
 
-  echo -e "Install PM2 - Process manager for Node.js\n"
+  echo -e "Install PM2 - Process manager for Node.js"
+  enter-when-ready
 
   yarn global add pm2
 
@@ -68,14 +72,16 @@ fi
 
 if [ ! -d /opt/webinoly ]; then
 
-  echo -e "Install web server - Nginx, MariaDB/MySQL, PHP\n"
+  echo -e "Install web server - NGINX, MariaDB, PHP"
+  enter-when-ready
 
   # wget -qO weby qrok.es/wy && sudo bash weby 0
   # sudo tar -xf $HOME/webinoly.tar -C /opt/webinoly
 
-  ### Below based on weby script --->
 
   sudo mkdir -p /opt/webinoly
+
+  ### Below based on weby script --->
 
   sudo cp -r $SCRIPTPATH/assets/webinoly/lib /opt/webinoly
   sudo cp -r $SCRIPTPATH/assets/webinoly/plugins /opt/webinoly
@@ -91,7 +97,10 @@ if [ ! -d /opt/webinoly ]; then
 
   sudo -s source /opt/webinoly/lib/general
 
+  conf_write app-version $app_version
+
   ### <---
+
 
   sudo webinoly -conf-value_max-mb-uploads=200
   sudo webinoly -conf-value_nginx-ppa=mainline
@@ -129,7 +138,8 @@ fi
 
 if [ ! -f ~/bin/composer ]; then
 
-  echo -e "Install Composer - Package manager for PHP\n"
+  echo -e "Install Composer - Package manager for PHP"
+  enter-when-ready
 
   curl https://getcomposer.org/installer -o install-composer.php
   php install-composer.php
@@ -139,7 +149,8 @@ fi
 
 if [ ! -f ~/bin/wp ]; then
 
-  echo -e "Install WP-CLI - Command line interface for WordPress\n"
+  echo -e "Install WP-CLI - Command line interface for WordPress"
+  enter-when-ready
 
   curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
   php wp-cli.phar --info

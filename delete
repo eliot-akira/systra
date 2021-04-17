@@ -1,7 +1,10 @@
 #!/bin/bash
 
 if [ -z $1 ]; then
-  echo -e "Delete a site\n\nUsage: sys delete [domain name]\n"
+  echo -e "Delete a site\n\nUsage:"
+  echo "  delete [domain]           Delete site"
+  echo "  delete [domain] [folder]  Delete child site"
+  echo
   exit
 fi
 

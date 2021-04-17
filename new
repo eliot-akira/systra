@@ -1,7 +1,10 @@
 #!/bin/bash
 
 if [ -z $1 ]; then
-  echo -e "Create a new site\n\nUsage: sys new [domain name]\n"
+  echo -e "Create a new site\n\nUsage:"
+  echo "  new [domain]              Create new site"
+  echo "  new [domain] [folder]     Create new child site"
+  echo
   exit
 fi
 
@@ -37,5 +40,5 @@ if [ ! -L ~/apps/$DOMAIN_NAME ]; then
   exit
 fi
 
-sudo site $DOMAIN_NAME -subfolder=/$SUBFOLDER -wp -force-redirect=root
+sudo site $DOMAIN_NAME -subfolder=/$SUBFOLDER -wp -force-redirect=root # www -> root domain
 sudo httpauth $DOMAIN_NAME -subfolder=/$SUBFOLDER -wp-admin=off &> /dev/null
