@@ -755,6 +755,12 @@ webinoly_update() {
 }
 
 
+wp_package_update() {
+  echo "${dim}Downloading WordPress...${end}${blu}"
+  sudo wget --timeout=15 -t 1 -qrO /var/www/wp.tar.gz https://wordpress.org/latest.tar.gz
+}
+
+
 server_reset() {
 	# Regenerate NGINX conf files
 	if [[ $(conf_read nginx-optim) == "true" && $server_reset =~ ^(nginx|all)$ ]]; then		

@@ -1,9 +1,17 @@
 #!/bin/bash
 
-echo -e "Update system\n"
-
 SCRIPTPATH=$(dirname $(readlink -f "$0"))
 . $SCRIPTPATH/common
+
+echo -e "Update system\n"
+
+if [ "$1" == "wp" ]; then
+  sudo webinoly -update-wp
+  sudo wget --timeout=15 -t 1 -qrO /var/www/wp.tar.gz https://wordpress.org/latest.tar.gz
+  echo "Downloaded latest version of WordPress to /var/www/wp.tar.gz"
+  echo "The package will be used to create new sites."
+fi
+
 
 if [ "$1" == "webinoly" ]; then
 
@@ -23,6 +31,6 @@ if [ "$1" == "webinoly" ]; then
   sudo chmod 755 /opt/webinoly/plugins/*
   sudo cp /opt/webinoly/plugins/* /usr/bin/
 
-  sudo webinoly -update
+  # sudo webinoly -update
 
 fi

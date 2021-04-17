@@ -101,7 +101,7 @@ if [ ! -d /opt/webinoly ]; then
 
   ### <---
 
-
+  sudo webinoly -login-www-data=on
   sudo webinoly -conf-value_max-mb-uploads=200
   sudo webinoly -conf-value_nginx-ppa=mainline
   sudo stack -lemp

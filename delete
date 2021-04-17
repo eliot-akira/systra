@@ -45,7 +45,7 @@ fi
 
 CHILD_SITE_PATH=$PARENT_SITE_PATH/$SUBFOLDER
 
-if [ ! -L $CHILD_SITE_PATH ]; then
+if [ ! -d $CHILD_SITE_PATH ]; then
   echo "Site not found: $CHILD_SITE_PATH"
   exit
 fi

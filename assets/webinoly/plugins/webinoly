@@ -15,8 +15,12 @@ if [[ -n $update ]]; then
 	api-events_update wy1
 	webinoly_update
 	nginx_not="true" # Nginx-Reload not-needed.
-	
-	
+
+elif [[ -n $update_wp ]]; then
+	wp_package_update
+	nginx_not="true" # Nginx-Reload not-needed.
+
+
 elif [[ -n $server_reset ]]; then
 	api-events_update wy2
 	if [[ $server_reset == true ]]; then
