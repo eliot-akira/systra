@@ -1,0 +1,28 @@
+#!/bin/bash
+
+if [ -z $1 ]; then
+  echo -e "Get information about a site\n\nUsage:"
+  echo "  info [domain]           Delete site"
+#  echo "  info [domain] [folder]  Delete child site"
+  echo
+  exit
+fi
+
+SCRIPTPATH=$(dirname $(readlink -f "$0"))
+. $SCRIPTPATH/common
+
+DOMAIN_NAME=$1
+SUBFOLDER=$2
+
+if [ -z "$SUBFOLDER" ]; then
+  echo "Site information: $DOMAIN_NAME"
+  sudo site $DOMAIN_NAME -info
+  exit
+fi
+
+
+# Subfolder of existing site
+
+echo "Site information: $DOMAIN_NAME/$SUBFOLDER"
+
+sudo site $DOMAIN_NAME -subfolder=/$SUBFOLDER -info
