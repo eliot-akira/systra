@@ -1,17 +1,25 @@
 #!/bin/bash
 
-if [ -z $1 ]; then
-  echo -e "Get information about a site\n\nUsage:"
-  echo "  info [domain]           Delete site"
-#  echo "  info [domain] [folder]  Delete child site"
-  echo
-  exit
-fi
+# if [ -z $1 ]; then
+#   echo -e "Get information about a site\n\nUsage:"
+#   echo "  info                    Info about system"
+#   echo "  info [domain]           Info about site"
+#   echo "  info [domain] [folder]  Info about child site"
+#   echo
+#   exit
+# fi
 
 SCRIPTPATH=$(dirname $(readlink -f "$0"))
 . $SCRIPTPATH/common
 
 DOMAIN_NAME=$1
+
+if [ -z "$DOMAIN_NAME" ]; then
+  echo "System information"
+  sudo webinoly -info
+  exit
+fi
+
 SUBFOLDER=$2
 
 if [ -z "$SUBFOLDER" ]; then

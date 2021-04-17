@@ -19,7 +19,7 @@ if [ -z "$SUBFOLDER" ]; then
   echo "Creating site at $DOMAIN_NAME"
   enter-when-ready
 
-  # www -> root domain, enable SFTP user www-data
+  # www -> root domain
   sudo site $DOMAIN_NAME -wp -force-redirect=root
   sudo httpauth $DOMAIN_NAME -wp-admin=off &> /dev/null
 

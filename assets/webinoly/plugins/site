@@ -441,6 +441,12 @@ elif [[ -n $list && -z $redirection ]]; then
 	nginx_not="true" # Nginx-Reload not-needed.
 
 
+# List databases
+elif [[ -n $list_db ]]; then
+  sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS -e "SHOW DATABASES;"
+	nginx_not="true" # Nginx-Reload not-needed.
+
+
 # Site Info
 elif [[ -n $info && -f /etc/nginx/sites-available/$domain ]]; then
 	[[ -n $subfolder ]] && site_info_subfolder || site_info

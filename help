@@ -8,4 +8,7 @@ echo "  new [domain]              Create new site"
 echo "  new [domain] [folder]     Create new child site"
 echo "  delete [domain]           Delete site"
 echo "  delete [domain] [folder]  Delete child site"
+echo "  info                      Info about system"
+echo "  info [domain]             Info about site"
+echo "  info [domain] [folder]    Info about child site"
 echo
