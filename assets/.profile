@@ -26,6 +26,9 @@ if [ -d "$HOME/.local/bin" ] ; then
     PATH="$HOME/.local/bin:$PATH"
 fi
 
+bind '"\e[1;2C": forward-word'  # Shift + Right
+bind '"\e[1;2D": backward-word' # Shift + Left
+
 BLACK=$(tput setaf 0)
 RED=$(tput setaf 1)
 GREEN=$(tput setaf 2)
@@ -44,4 +47,4 @@ UNDERLINE=$(tput smul)
 
 GRAY=$(tput setaf 244)
 
-export PS1="\[$GREEN\]\u@\h:\[$BLUE\]\w\[$GRAY\]\$\[$NORMAL\] "
+export PS1="\[$GREEN\]\u@\h\[$GRAY\]:\[$BLUE\]\w\[$GRAY\]\$\[$NORMAL\] "
