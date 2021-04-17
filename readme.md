@@ -19,8 +19,8 @@ The command `sys` will be available after installation. Run it to see help scree
 
 ## Develop
 
-Update bundled Webinoly library
+Update bundled Webinoly from library root.
 
 ```sh
-wget -O - https://github.com/QROkes/webinoly/tarball/master | tar xz --one-top-level=webinoly --strip-components 1 && rm -rf assets/webinoly ; mv webinoly assets
+wget -O - https://github.com/eliot-akira/webinoly/tarball/master | tar xz --one-top-level=webinoly --strip-components 1 && rm -rf assets/webinoly ; mv webinoly assets
 ```
