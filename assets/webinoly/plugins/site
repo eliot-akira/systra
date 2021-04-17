@@ -2,8 +2,8 @@
 
 # Site Manager Plugin (Create, delete and de/activate)
 # Syntax: site <domain> <option> <argument>
-# Options: -html, -php, -mysql, -wp, -parked, -proxy, -on, -off, -delete, -delete-all, -list, -cache, -ssl, -force-redirect, -yoast-sitemap, -multisite-convert, -clone-from, -replace-content, -redirection, -forward, -info, -env
-# Arguments: -cache, -root, -root-path, -subdomain, -ignore-ssl, -wildcard, -raw, -external-db, -revoke, -ssl-crt, -ssl-key, -ssl-ocsp, -subfolder, -from, -to, -http-code, -regex, -manual, -overwrite, -wp-cache-plugins
+# Options: -html, -php, -mysql, -wp, -parked, -proxy, -empty, -on, -off, -delete, -delete-all, -list, -cache, -ssl, -force-redirect, -yoast-sitemap, -multisite-convert, -clone-from, -replace-content, -redirection, -forward, -info, -env
+# Arguments: -cache, -root, -root-path, -subdomain, -ignore-ssl, -wildcard, -raw, -external-db, -revoke, -ssl-crt, -ssl-key, -ssl-ocsp, -subfolder, -from, -to, -http-code, -regex, -manual, -overwrite, -wp-cache-plugins, -dedicated-reverse-proxy, -must-staple, -times, -skip-cache, -skip-cookie-cache, -query-string-cache, -query-string-never-cache, -reset
 
 # shopt is necessary for this kind !(html|22222) of patterns
 shopt -s extglob
@@ -101,13 +101,10 @@ fi
 if [[ -n $subfolder && ! ( $subfolder =~ ^\/([A-Za-z0-9_\/\-]+)?[^\/]$ ) ]]; then
 	echo "${red}[ERROR] Please, enter a valid value for subfolder!${end}"
 	exit 1
-elif [[ -n $subfolder && -z $delete && -z $cache && -z $yoast_sitemap && -z $multisite_convert && -z $clone_from && -z $replace_content && -z $wp && -z $html && -z $php && -z $mysql && -z $proxy && -z $env ]]; then
+elif [[ -n $subfolder && -z $delete && -z $cache && -z $yoast_sitemap && -z $multisite_convert && -z $clone_from && -z $replace_content && -z $wp && -z $html && -z $php && -z $mysql && -z $proxy && -z $env && -z $info ]]; then
 	echo "${red}[ERROR] Subfolder option not supported!${end}"
 	exit 1
-elif [[ -n $subfolder && ( -n $cache || -n $yoast_sitemap || -n $multisite_convert || -n $replace_content ) && $(is_subfolder $domain $subfolder) != "wp" ]]; then
-	echo "${red}[ERROR] Subfolder not found or is not a WP site!${end}"
-	exit 1
-elif [[ -n $subfolder && -n $clone_from && $(is_subfolder $clone_from $subfolder) != "wp" ]]; then
+elif [[ -n $subfolder && ( $cache == "on" || -n $yoast_sitemap || -n $multisite_convert || -n $replace_content ) && $(is_subfolder $domain $subfolder) != "wp" ]]; then
 	echo "${red}[ERROR] Subfolder not found or is not a WP site!${end}"
 	exit 1
 else
@@ -128,12 +125,7 @@ if [[ -n $delete_all ]]; then
 # Create PHP or MySQL site
 elif [[ -n $mysql || ( -n $php && -n $domain ) ]]; then
 	if [[ -n $domain ]]; then
-		# Temporary FIX
-		if [[ $(is_proxy $domain) == "true" || ( -f /etc/nginx/sites-available/$domain && -n $(grep -F "proxy.conf;" /etc/nginx/sites-available/$domain)) ]]; then
-			echo "${red}[ERROR] Incompatible with your current Reverse-Proxy site! (We will fix this issue soon)${end}"
-			exit 1
-		fi
-		
+		full_empty_not_allowed
 		if [[ -f /etc/nginx/sites-available/$domain && -n $subfolder && $(is_subfolder $domain $subfolder) != "false" ]]; then
 			echo "${red}[ERROR] Subfolder${blu} $subfolder ${red}already exists!${end}"
 			exit 1
@@ -158,15 +150,16 @@ elif [[ -n $mysql || ( -n $php && -n $domain ) ]]; then
 	[[ -n $mysql ]] && wpinstall
 
 
+# Create EMPTY site
+elif [[ -n $empty && -n $domain ]]; then
+	full_empty_not_allowed
+	echo "${blu}You've created an EMPTY site, which means that you need to add your own NGINX configuration. ${dim}(/var/www/example.com/*-nginx.conf)${end}"
+	[[ $empty == "blank" ]] && create_empty_site -full || create_empty_site
+
+
 # Create HTML site
 elif [[ -n $html && -n $domain ]]; then
-	
-	# Temporary FIX
-	if [[ $(is_proxy $domain) == "true" || ( -f /etc/nginx/sites-available/$domain && -n $(grep -F "proxy.conf;" /etc/nginx/sites-available/$domain)) ]]; then
-		echo "${red}[ERROR] Incompatible with your current Reverse-Proxy site! (We will fix this issue soon)${end}"
-		exit 1
-	fi
-	
+	full_empty_not_allowed
 	if [[ -f /etc/nginx/sites-available/$domain && -n $subfolder && $(is_subfolder $domain $subfolder) != "false" ]]; then
 		echo "${red}[ERROR] Subfolder${blu} $subfolder ${red}already exists!${end}"
 		exit 1
@@ -190,12 +183,7 @@ elif [[ -n $html && -n $domain ]]; then
 
 # Create WP site
 elif [[ -n $wp && -n $domain ]]; then
-	# Temporary FIX
-	if [[ $(is_proxy $domain) == "true" || ( -f /etc/nginx/sites-available/$domain && -n $(grep -F "proxy.conf;" /etc/nginx/sites-available/$domain)) ]]; then
-		echo "${red}[ERROR] Incompatible with your current Reverse-Proxy site! (We will fix this issue soon)${end}"
-		exit 1
-	fi
-	
+	full_empty_not_allowed
 	if [[ -z $subfolder ]]; then
 		if [[ $(is_empty_root_site $domain) == "true" ]]; then		
 			wpinstall
@@ -250,26 +238,18 @@ elif [[ -n $multisite_convert && -f /etc/nginx/sites-available/$domain ]]; then
 
 # Parked Domain
 elif [[ -n $parked && -n $domain ]]; then
+	full_empty_not_allowed
 	parked_domain
 
 	
 # Reverse proxy
-elif [[ -n $proxy && -n $domain ]]; then
-	
-	# Temporary FIX
-	if [[ -n $subfolder && -f /etc/nginx/sites-available/$domain && $(is_proxy $domain) != "true" ]]; then
-		echo "${red}[ERROR] Reverse Proxy subfolders only can be installed when main site is reverse proxy! (We will fix this issue soon)${end}"
-		exit 1
-	elif [[ -z $subfolder && $(is_empty_root_site $domain) == "true" && -z $(grep -F "proxy.conf;" /etc/nginx/sites-available/$domain) ]]; then
-		echo "${red}[ERROR] Reverse-Proxy site incompatible with your current subfolders! (We will fix this issue soon)${end}"
-		exit 1
-	fi
-	
+elif [[ -n $proxy && -n $domain ]]; then	
 	reverse_proxy
 	
 
 # Forward domain
 elif [[ -n $forward && -n $domain ]]; then
+	full_empty_not_allowed
 	forward_domain
 	
 	
@@ -296,6 +276,11 @@ elif [[ -n $redirection && -f /etc/nginx/sites-available/$domain ]]; then
 	check_for_nginx
 	redirection_manager
 
+
+# FastCGI Cache
+elif [[ -n $cache && -f /etc/nginx/sites-available/$domain ]]; then
+	wp_cache
+
 	
 # Delete site	
 elif [[ -n $delete && -f /etc/nginx/sites-available/$domain ]]; then
@@ -319,6 +304,12 @@ elif [[ -n $delete && -f /etc/nginx/sites-available/$domain ]]; then
 		sudo sed -i "/# WebinolyCustom/,/# WebinolyCustomEnd/{/$domain$subname-proxy.conf/d}" /etc/nginx/sites-available/$domain
 		sudo sed -i "/# WebinolyNginxServerStart/,/# WebinolyNginxServerEnd/{\|location $subfolder/ |d}" /etc/nginx/sites-available/$domain
 		echo "${gre}Subfolder${blu} $subfolder ${gre}from${blu} $domain ${gre}has been successfully deleted!${end}"
+		
+		# In case of custom cache
+		if [[ -f /etc/nginx/conf.d/webinoly.conf ]]; then
+			sudo sed -i "/^fastcgi_cache_path \/run\/nginx-cache\/$(echo $domain | sed 's/[^0-9A-Za-z]/_/g')${subname} .*/d" /etc/nginx/conf.d/webinoly.conf
+			[[ ! -s /etc/nginx/conf.d/webinoly.conf ]] && sudo rm /etc/nginx/conf.d/webinoly.conf
+		fi
 	else
 		deletesite
 	fi
@@ -402,25 +393,27 @@ elif [[ -n $clone_from ]]; then
 	elif [[ -f /etc/nginx/sites-available/$domain && -n $subfolder && $(is_subfolder $domain $subfolder) != "false" && $overwrite != "on" ]]; then
 		echo "${red}[ERROR] Subfolder ${blu}'$subfolder'${red} already exists!${end}"
 		exit 1
-	elif [[ $(is_wp $clone_from $subfolder) != "true" ]]; then
-		echo "${red}[ERROR] Site${blu} ${clone_from}${subfolder} ${red}is not a WordPress site!${end}"
-		exit 1
 	elif [[ $(is_parked $clone_from) == "true" ]]; then
 		echo "${red}[ERROR] Cloning a parked site is not allowed!${end}"
 		exit 1
 	fi
 	
-	wp_conf_retrieve $clone_from $subfolder #We need to call this function in the parent shell to preserve variables and avoid asking two times for the same values in case of external db.
-	if [[ ( $wp_dbhost == "localhost" && $(check_mysql_connection localhost) != "true" ) || ( $wp_dbhost != "localhost" && $(check_mysql_connection $extdb_url $extdb_port $extdb_user $extdb_pass) != "true" ) ]]; then
-		exit 1
+	if [[ $(is_wp $clone_from $subfolder) == "true" ]]; then
+		#We need to call this function in the parent shell to preserve variables and avoid asking two times for the same values in case of external db.
+		wp_conf_retrieve $clone_from $subfolder 
+		iswpclone="true"
+		
+		if [[ ( $wp_dbhost == "localhost" && $(check_mysql_connection localhost) != "true" ) || ( $wp_dbhost != "localhost" && $(check_mysql_connection $extdb_url $extdb_port $extdb_user $extdb_pass) != "true" ) ]]; then
+			exit 1
+		elif [[ $(is_wp_multisite $clone_from $subfolder) != "false" ]]; then
+			echo "${red}[ERROR] WordPress Multisite can not be cloned!${end}"
+			exit 1
+		elif [[ $(is_wp_installed $clone_from $subfolder) != "true" ]]; then
+			echo "${dim}[INFO] WordPress is empty and still not configured in ${clone_from}${subfolder} site!${end}"
+		fi
 	fi
 	
-	if [[ $(is_wp_multisite $clone_from $subfolder) != "false" ]]; then
-		echo "${red}[ERROR] WordPress Multisite can not be cloned!${end}"
-		exit 1
-	else
-		clone_wp_site
-	fi
+	cloning_site
 
 
 # Replace Content
@@ -442,11 +435,6 @@ elif [[ -n $env && -f /etc/nginx/sites-available/$domain ]]; then
 	nginx_not="true" # Nginx-Reload not-needed.
 	
 
-# FastCGI Cache
-elif [[ -n $cache ]]; then
-	wp_cache
-	
-
 # List Sites
 elif [[ -n $list && -z $redirection ]]; then
 	list_sites
@@ -455,7 +443,7 @@ elif [[ -n $list && -z $redirection ]]; then
 
 # Site Info
 elif [[ -n $info && -f /etc/nginx/sites-available/$domain ]]; then
-	site_info
+	[[ -n $subfolder ]] && site_info_subfolder || site_info
 	nginx_not="true" # Nginx-Reload not-needed.
 	
 

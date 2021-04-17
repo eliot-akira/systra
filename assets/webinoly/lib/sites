@@ -583,6 +583,12 @@ deletesite() {
 	sudo rm -rf /etc/nginx/sites-enabled/$domain
 	sudo rm -rf /var/www/$domain
 	
+	# In case of custom cache
+	if [[ -f /etc/nginx/conf.d/webinoly.conf ]]; then
+		sudo sed -i "/^fastcgi_cache_path \/run\/nginx-cache\/$(echo $domain | sed 's/[^0-9A-Za-z]/_/g').*/d" /etc/nginx/conf.d/webinoly.conf
+		[[ ! -s /etc/nginx/conf.d/webinoly.conf ]] && sudo rm /etc/nginx/conf.d/webinoly.conf
+	fi
+	
 	echo "${gre}Site${blu} $domain ${gre}has been successfully deleted!${end}"
 }
 
@@ -590,6 +596,11 @@ deletesite() {
 create_empty_site() {
 	createsite
 	sudo sed -i '/ common\/php.conf;/d' /etc/nginx/sites-available/$domain
+	
+	if [[ $1 == "-full" ]]; then
+		sudo sed -i "/locations.conf;/d" /etc/nginx/sites-available/$domain
+		sudo sed -i "/include .*headers-.*.conf;/d" /etc/nginx/sites-available/$domain
+	fi
 }
 
 
@@ -961,10 +972,12 @@ wp_subfolder() {
 	sudo cp /etc/nginx/common/wpcommon.conf /etc/nginx/apps.d/$domain$subname-wpcommon.conf
 	sed -ri "s/location(.*) \/(.*) \{$/location\1 subfolder\/\2 \{/" /etc/nginx/apps.d/$domain$subname-wpcommon.conf
 	sudo sed -i "s#subfolder#$subfolder#g" /etc/nginx/apps.d/$domain$subname-wpcommon.conf
+	sudo sed -i '/WPRobotStart/,/WPRobotsEnd/{/.*/d}' /etc/nginx/apps.d/$domain$subname-wpcommon.conf
 	
 	sudo cp /etc/nginx/common/wpcommon-noauth.conf /etc/nginx/apps.d/$domain$subname-wpcommon-noauth.conf
 	sed -ri "s/location(.*) \/(.*) \{$/location\1 subfolder\/\2 \{/" /etc/nginx/apps.d/$domain$subname-wpcommon-noauth.conf
 	sudo sed -i "s#subfolder#$subfolder#g" /etc/nginx/apps.d/$domain$subname-wpcommon-noauth.conf
+	sudo sed -i '/WPRobotStart/,/WPRobotsEnd/{/.*/d}' /etc/nginx/apps.d/$domain$subname-wpcommon-noauth.conf
 	
 	sudo cp /etc/nginx/common/yoast-sitemap.conf /etc/nginx/apps.d/$domain$subname-yoast-sitemap.conf
 	sudo sed -i "s#/index.php#$subfolder/index.php#g" /etc/nginx/apps.d/$domain$subname-yoast-sitemap.conf
@@ -1063,7 +1076,7 @@ parked_domain() {
 	elif [[ $(is_parked $parked) == "true" ]]; then
 		echo "${red}[ERROR] Parking a site using a parked site as main site is not allowed! ${end}"
 		exit 1
-	elif [[ $(is_empty_root_site $parked) == "true" ]]; then
+	elif [[ $(is_empty_root_site $parked) =~ ^(true|full)$ ]]; then
 		echo "${red}[ERROR] Invalid main site!${end}"
 		exit 1
 	fi
@@ -1076,7 +1089,7 @@ parked_domain() {
 	sudo cat /etc/nginx/sites-available/$parked > /etc/nginx/sites-available/$domain
 	
 	# Prevent if SSL is enabled in main site and ssl data is copied to parked site causing an error.
-	sudo site $domain -ssl=off -revoke=off > /dev/null 2>&1
+	[[ $(is_ssl $parked) == "true" ]] && revoke="off" && site_ssl_off > /dev/null 2>&1
 	
 	# Prevent if main site is default.
 	[[ $(conf_read default-site) == $parked ]] && remove_nginx_default_server $domain
@@ -1088,7 +1101,13 @@ parked_domain() {
 	sudo sed -i "/root/c \	root /var/www/$parked/htdocs;" /etc/nginx/sites-available/$domain
 	
 	# Remove any conf file, this means we will not have subfolder support for parked sites, Should it be supported?
-	sudo sed -i "/WebinolyCustom/,/WebinolyCustomEnd/ {/include apps.d\/${domain}.*conf;/d}" /etc/nginx/sites-enabled/$domain
+	sudo sed -i "/WebinolyCustom/,/WebinolyCustomEnd/ {/include apps.d\/${domain}.*conf;/d}" /etc/nginx/sites-available/$domain
+	
+	# In case of WP cache, should be disabled in the new parked conf
+	sudo sed -i "/include common\/wpfc.conf;/c \	include common\/php.conf;" /etc/nginx/sites-available/$domain
+	sudo sed -i "/include apps.d\/${domain}-wpcache.conf;/c \	include common\/php.conf;" /etc/nginx/sites-available/$domain
+	[[ $(conf_read php-info) != "false" ]] && sudo sed -i "/include apps.d\/${domain}-phpcache.conf;/c \	include common\/phpx.conf;" /etc/nginx/sites-available/$domain
+	[[ $(conf_read php-info) == "false" ]] && sudo sed -i "/include apps.d\/${domain}-phpcache.conf;/c \	include common\/php.conf;" /etc/nginx/sites-available/$domain
 	
 	cusconl=$( grep -o "include /var/www/$domain/.*" /etc/nginx/sites-available/$domain | sed "s/$domain/$parked/" )
 	sed -i "/include \/var\/www\/$domain/c \	${cusconl}" /etc/nginx/sites-available/$domain
@@ -1142,30 +1161,46 @@ reverse_proxy() {
 	if ! [[ -n $proxydata && $(is_url $proxydata) =~ ^(http|https|ip|true)$ ]]; then
 		echo "${red}[ERROR] Please, enter a valid host and port!${end}"
 		exit 1
+	elif [[ -f /etc/nginx/sites-available/$domain && -z $subfolder && (($(is_empty_root_site $domain) == "full" && $(is_proxy $domain) != "false") || $(is_empty_root_site $domain) == "false") ]]; then
+		echo "${red}[ERROR] Site${blu} $domain ${red}already exists!${end}"
+		exit 1
 	elif [[ -f /etc/nginx/sites-available/$domain && -n $subfolder && $(is_subfolder $domain $subfolder) != "false" ]]; then
 		echo "${red}[ERROR] Subfolder${blu} $subfolder ${red}already exists!${end}"
+		exit 1
+	elif [[ -f /etc/nginx/sites-available/$domain && -n $dedicated_reverse_proxy && $(is_empty_root_site $domain) != "full" && $(is_dedicated_proxy_domain $domain) != "true" ]]; then
+		echo "${red}[ERROR] Main site is not a Dedicated Reverse Proxy site!${end}"
+		exit 1
+	elif [[ $(is_empty_root_site $domain) == "full" && $(is_dedicated_proxy_domain $domain) == "false" ]]; then
+		echo "${red}[ERROR] This domain is currently set as Empty (blank), to create a site you need to add your own NGINX configuration. ${dim}(/var/www/example.com/*-nginx.conf)!${end}"
 		exit 1
 	fi
 	
 	if [[ ( -z $subfolder || ( -n $subfolder && ! -f /etc/nginx/sites-available/$domain )) && $(is_empty_root_site $domain) == "false" ]]; then
-		create_empty_site
+		[[ -n $dedicated_reverse_proxy ]] && create_empty_site -full || create_empty_site
+	elif [[ -z $subfolder && $(is_empty_root_site $domain) == "full" && $(is_dedicated_proxy $domain) == "false" ]]; then
+		echo "${gre}Site configuration found: Main site at${blu} $domain ${gre}root has been successfully set as Dedicated Reverse-Proxy!${end}"
 	elif [[ -z $subfolder && $(is_empty_root_site $domain) == "true" ]]; then
-		echo "${gre}Subfolder configuration found: Main site at${blu} $domain ${gre}root has been successfully set as Reverse-Proxy!${end}"
+		echo "${gre}Site configuration found: Main site at${blu} $domain ${gre}root has been successfully set as Reverse-Proxy!${end}"
 	fi
 	
 	is_url $proxydata -split
 	[[ -n $url_scheme ]] && url_scheme="$url_scheme://" || url_scheme="http://"
 	[[ -n $url_port ]] && url_port=":$url_port"
 	rpurl="$url_host$url_port$url_path"
-	[[ $(echo $rpurl | rev | cut -c-1) != "/" ]] && rpurl="${rpurl}/"
 	
 	sudo cp /opt/webinoly/templates/template-site-proxy /etc/nginx/apps.d/$domain$subname-proxy.conf
 	sudo sed -i "/# WebinolyCustom$/a \	include apps.d/$domain$subname-proxy.conf;" /etc/nginx/sites-available/$domain
-	[[ -n $subfolder ]] && sudo sed -i "/^location \/ {/c location $subfolder/ {" /etc/nginx/apps.d/$domain$subname-proxy.conf
-	sudo sed -i "s#http://localhost:8080/#${url_scheme}${rpurl}#g"  /etc/nginx/apps.d/$domain$subname-proxy.conf
 	
-	# Temporary FIX
-	sudo sed -i '/locations.conf;/s/^/#/' /etc/nginx/sites-available/$domain
+	if [[ -n $dedicated_reverse_proxy || $(is_dedicated_proxy_domain $domain) == "true" ]]; then
+		sudo sed -i '/CacheStaticFiles/,/BasicLocEnd/{/.*/d}' /etc/nginx/apps.d/$domain$subname-proxy.conf
+		echo "${blu}${bol}This site is set as Dedicated Reverse Proxy!${end}"
+	fi
+	
+	if [[ -n $subfolder ]]; then
+		sudo sed -i '/BasicLocationRootFiles/,/BasicLocEnd/{/.*/d}' /etc/nginx/apps.d/$domain$subname-proxy.conf
+		sudo sed -i "/^location \/ {/c location $subfolder/ {" /etc/nginx/apps.d/$domain$subname-proxy.conf
+	fi
+	sudo sed -i "s#http://localhost:8080#${url_scheme}${rpurl}#g"  /etc/nginx/apps.d/$domain$subname-proxy.conf
 	
 	# Check host and port
 	local code=$(wget -t 1 --timeout=5 --server-response --spider $rpurl 2>&1 | awk '/^  HTTP/{print $2}')
@@ -1177,26 +1212,69 @@ reverse_proxy() {
 }
 
 
+full_empty_not_allowed() {
+	# Full Empty sites are only for Dedicated Reverse Proxy sites
+	if [[ $(is_dedicated_proxy_domain $domain) == "true" ]]; then
+		echo "${red}[ERROR] This domain is currently set as Dedicated Reverse Proxy!${end}"
+		exit 1
+	elif [[ $(is_empty_root_site $domain) == "full" ]]; then
+		echo "${red}[ERROR] This domain is currently set as Empty (blank), to create a site you need to add your own NGINX configuration. ${dim}(/var/www/example.com/*-nginx.conf)!${end}"
+		exit 1
+	fi
+}
+
+
 wp_cache() {
-	if [[ $cache == "off" && -f /etc/nginx/sites-available/$domain ]]; then
+	if [[ $cache == "off" ]]; then
 		api-events_update si9
-		if [[ -n $subfolder && $(is_wp_cache $domain $subfolder) == "true" ]]; then
+		if [[ $(is_cache $domain $subfolder) == "custom" ]]; then
+			if [[ $(conf_read php-info) != "false" && $(is_wp $domain $subfolder) != "true" ]]; then
+				if [[ -z $subfolder ]]; then
+					sudo sed -i "/apps.d\/$domain$subname-.*cache.conf;/c \	include common/phpx.conf;" /etc/nginx/sites-available/$domain
+				elif [[ -n $subfolder && -f /etc/nginx/apps.d/$domain$subname-phpx.conf ]]; then
+					sudo sed -i "/apps.d\/$domain$subname-.*cache.conf;/c \	include apps.d/$domain$subname-phpx.conf;" /etc/nginx/sites-available/$domain
+				elif [[ -n $subfolder && ! -f /etc/nginx/apps.d/$domain$subname-phpx.conf ]]; then
+					# Try with the other PHP option
+					if [[ -n $subfolder && -f /etc/nginx/apps.d/$domain$subname-php.conf ]]; then
+						sudo sed -i "/apps.d\/$domain$subname-.*cache.conf;/c \	include apps.d/$domain$subname-php.conf;" /etc/nginx/sites-available/$domain
+					else
+						echo "${red}[ERROR] PHP Configuration file not found!${end}"
+						exit 1
+					fi
+				fi
+			else
+				# WP sites are forced to take this option
+				if [[ -z $subfolder ]]; then
+					sudo sed -i "/apps.d\/$domain$subname-.*cache.conf;/c \	include common/php.conf;" /etc/nginx/sites-available/$domain
+				elif [[ -n $subfolder && -f /etc/nginx/apps.d/$domain$subname-php.conf ]]; then
+					sudo sed -i "/apps.d\/$domain$subname-.*cache.conf;/c \	include apps.d/$domain$subname-php.conf;" /etc/nginx/sites-available/$domain
+				elif [[ -n $subfolder && ! -f /etc/nginx/apps.d/$domain$subname-php.conf ]]; then
+					# Try with the other PHP option (except if site is WP)
+					if [[ -n $subfolder && -f /etc/nginx/apps.d/$domain$subname-phpx.conf && $(is_wp $domain $subfolder) != "true" ]]; then
+						sudo sed -i "/apps.d\/$domain$subname-.*cache.conf;/c \	include apps.d/$domain$subname-phpx.conf;" /etc/nginx/sites-available/$domain
+					else
+						echo "${red}[ERROR] PHP Configuration file not found!${end}"
+						exit 1
+					fi
+				fi
+			fi
+			
+			echo "${gre}Custom FastCGI Cache in${blu} $domain ${gre}has been disabled!${end}"
+		elif [[ $(is_cache $domain $subfolder) == "proxy" ]]; then
+			sudo sed -i "/proxy_cache .*;/c \	proxy_cache off;" /etc/nginx/apps.d/$domain$subname-proxy.conf
+			echo "${gre}Proxy Cache in${blu} $domain$subfolder ${gre}has been disabled!${end}"
+		elif [[ -n $subfolder && $(is_cache $domain $subfolder) == "wp" ]]; then
 			sudo sed -i "/apps.d\/$domain$subname-wpfc.conf;/c \	include apps.d/$domain$subname-php.conf;" /etc/nginx/sites-available/$domain
 			echo "${gre}FastCGI Cache in${blu} $domain$subfolder ${gre}has been disabled!${end}"
-		elif [[ $(is_wp_cache $domain) == "true" ]]; then
+		elif [[ $(is_cache $domain) == "wp" ]]; then
 			sudo sed -i '/common\/wpfc.conf/c \	include common/php.conf;' /etc/nginx/sites-available/$domain
 			echo "${gre}FastCGI Cache in${blu} $domain ${gre}has been disabled!${end}"
 		else
-			if [[ $(is_wp $domain $subfolder) == "false" ]]; then
-				echo "${red}[ERROR] Site${blu} $domain$subfolder ${red}is not a WP site!${end}"
-				exit 1
-			else
-				echo "${gre}FastCGI Cache is already disabled on your site${blu} $domain${end}"
-			fi
+			echo "${gre}Nginx Cache is already disabled on your site${blu} $domain${end}"
 		fi	
-	elif [[ $cache == "on" && -f /etc/nginx/sites-available/$domain ]]; then
+	elif [[ $cache == "on" ]]; then
 		api-events_update si8
-		if [[ $(is_wp $domain $subfolder) == "true" && $(is_wp_cache $domain $subfolder) == "false" ]]; then
+		if [[ $(is_wp $domain $subfolder) == "true" && $(is_cache $domain $subfolder) == "false" ]]; then
 			[[ -z $subfolder ]] && sudo sed -i '/ common\/php.conf/c \	include common/wpfc.conf;' /etc/nginx/sites-available/$domain
 			[[ -n $subfolder ]] && sudo sed -i "/ apps.d\/$domain$subname-php.conf;/c \	include apps.d/$domain$subname-wpfc.conf;" /etc/nginx/sites-available/$domain
 			if [[ $(is_parked $domain) == "false" && ( ! -d /var/www/$domain/htdocs$subfolder/wp-content/plugins/nginx-helper || ! -d /var/www/$domain/htdocs$subfolder/wp-content/plugins/redis-cache ) ]]; then
@@ -1227,6 +1305,120 @@ wp_cache() {
 			else
 				echo "${gre}FastCGI Cache is already enabled on your site${blu} $domain$subfolder${end}"
 			fi
+		fi
+	elif [[ $cache == "custom" ]]; then
+		if [[ $(is_wp $domain $subfolder) == "true" ]]; then
+			local fn="wpcache"
+		elif [[ $(is_php $domain $subfolder) == "true" ]]; then
+			local fn="phpcache"
+		elif [[ $(is_proxy $domain $subfolder) == "true" ]]; then
+			local fn="proxycache" # Just to pass the verification, not really needed!
+		else
+			echo "${red}[ERROR] Custom Cache only supported for PHP, WordPress and Reverse Proxy sites!${end}"
+			exit 1
+		fi
+		
+		[[ -z $reset ]] && api-events_update si8
+		
+		if [[ -n $reset ]]; then
+			if [[ $(is_cache $domain $subfolder) =~ ^(custom|proxy)$ ]]; then
+				echo "${red}[ERROR] Cannot remove the Custom Cache configuration file because is currently in use!${end}"
+				exit 1
+			elif [[ $(is_proxy $domain $subfolder) == "true" && -n $(grep -F "# WebinolyProxyCacheStart" /etc/nginx/apps.d/$domain$subname-proxy.conf) ]]; then
+				sudo sed -i '/WebinolyProxyCacheStart/,/WebinolyProxyCacheEnd/{/.*/d}' /etc/nginx/apps.d/$domain$subname-proxy.conf
+				sudo sed -i "/^proxy_cache_path \/run\/nginx-cache\/$(echo $domain | sed 's/[^0-9A-Za-z]/_/g')${subname} .*/d" /etc/nginx/conf.d/webinoly.conf
+				echo "${gre}Custom Proxy Cache configuration has been successfully removed! ${end}"
+			elif [[ -f /etc/nginx/apps.d/$domain$subname-${fn}.conf ]]; then
+				sudo rm /etc/nginx/apps.d/$domain$subname-${fn}.conf
+				sudo sed -i "/^fastcgi_cache_path \/run\/nginx-cache\/$(echo $domain | sed 's/[^0-9A-Za-z]/_/g')${subname} .*/d" /etc/nginx/conf.d/webinoly.conf
+				echo "${gre}Custom FastCGI Cache configuration file has been successfully removed! ${end}"
+			else
+				echo "${gre}Custom Nginx Cache configuration not found! ${end}"
+			fi
+			[[ -f /etc/nginx/conf.d/webinoly.conf && ! -s /etc/nginx/conf.d/webinoly.conf ]] && sudo rm /etc/nginx/conf.d/webinoly.conf
+		elif [[ -n $query_string_never_cache || $query_string_cache || $skip_cache || -n $skip_cookie_cache ]]; then
+			custom_cache_global -site
+		elif [[ -n $times ]]; then
+			config_fastcgi_cache -site $times
+		elif [[ $(is_cache $domain $subfolder) == "false" && $(is_proxy $domain $subfolder) == "true" && -n $(grep -F "# WebinolyProxyCacheStart" /etc/nginx/apps.d/$domain$subname-proxy.conf) ]]; then
+			sudo sed -i "/proxy_cache .*;/c \	proxy_cache $(echo $domain | sed "s/[^0-9A-Za-z]/_/g")${subname};" /etc/nginx/apps.d/$domain$subname-proxy.conf
+			echo "${gre}Custom Proxy Cache in${blu} $domain$subfolder ${gre}has been successfully enabled! ${end}"
+		elif [[ $(is_cache $domain $subfolder) == "false" && $(is_proxy $domain $subfolder) == "true" ]]; then
+			if [[ ! -f /etc/nginx/conf.d/webinoly.conf ]]; then
+				sudo touch /etc/nginx/conf.d/webinoly.conf
+				sudo chmod 644 /etc/nginx/conf.d/webinoly.conf
+				sudo chown -R root:root /etc/nginx/conf.d/webinoly.conf
+			fi
+				
+			# Cache Size for custom cache will be half of the global value by default
+			local cachesize=$(($(grep -F "fastcgi_cache_path " /etc/nginx/conf.d/fastcgi.conf | grep -Eo "max_size=.*m" | cut -d "=" -f 2 -s | grep -Eo "[0-9]+")/2))
+			[[ -n $cachesize && $cachesize =~ ^[0-9]+$ && $cachesize -gt 0 ]] || local cachesize=90
+				
+			local dom=$(echo $domain | sed "s/[^0-9A-Za-z]/_/g")
+			echo "proxy_cache_path /run/nginx-cache/${dom}${subname} levels=1:2 keys_zone=${dom}${subname}:50m max_size=${cachesize}m inactive=7d;" >> /etc/nginx/conf.d/webinoly.conf
+			
+			sudo sed -i '/proxy_http_version /r /opt/webinoly/templates/template-site-proxycache' /etc/nginx/apps.d/$domain$subname-proxy.conf
+			sudo sed -i "/proxy_cache STATIC;/c \	proxy_cache ${dom}${subname};" /etc/nginx/apps.d/$domain$subname-proxy.conf
+			sudo sed -i "/example\*site_custom_cache.conf;/c \	include apps.d/${domain}${subname}*site_custom_cache.conf;" /etc/nginx/apps.d/$domain$subname-proxy.conf
+			sudo sed -i "s/ \$skip_cache/ \$skip_cache_${dom}${subname}/g" /etc/nginx/apps.d/$domain$subname-proxy.conf
+			
+			echo "${gre}Custom Proxy Cache in${blu} $domain$subfolder ${gre}has been successfully enabled! ${end}"
+		elif [[ $(is_cache $domain $subfolder) == "false" ]]; then
+			[[ -z $subfolder ]] && sudo sed -i "/ common\/php.conf/c \	include apps.d/$domain$subname-${fn}.conf;" /etc/nginx/sites-available/$domain
+			[[ -z $subfolder ]] && sudo sed -i "/ common\/phpx.conf/c \	include apps.d/$domain$subname-${fn}.conf;" /etc/nginx/sites-available/$domain
+			[[ -n $subfolder ]] && sudo sed -i "/ apps.d\/$domain$subname-php.conf;/c \	include apps.d/$domain$subname-${fn}.conf;" /etc/nginx/sites-available/$domain
+			[[ -n $subfolder ]] && sudo sed -i "/ apps.d\/$domain$subname-phpx.conf;/c \	include apps.d/$domain$subname-${fn}.conf;" /etc/nginx/sites-available/$domain
+			
+			# Creates the custom Webinoly Cache File (.cnf) only if not exists.
+			if [[ ! -f /etc/nginx/apps.d/$domain$subname-${fn}.conf ]]; then
+				sudo touch /etc/nginx/apps.d/$domain$subname-${fn}.conf
+				sudo chmod 644 /etc/nginx/apps.d/$domain$subname-${fn}.conf
+				sudo chown -R root:root /etc/nginx/apps.d/$domain$subname-${fn}.conf
+				
+				if [[ ! -f /etc/nginx/conf.d/webinoly.conf ]]; then
+					sudo touch /etc/nginx/conf.d/webinoly.conf
+					sudo chmod 644 /etc/nginx/conf.d/webinoly.conf
+					sudo chown -R root:root /etc/nginx/conf.d/webinoly.conf
+				fi
+				
+				# Cache Size for custom cache will be half of the global value by default
+				local cachesize=$(($(grep -F "fastcgi_cache_path " /etc/nginx/conf.d/fastcgi.conf | grep -Eo "max_size=.*m" | cut -d "=" -f 2 -s | grep -Eo "[0-9]+")/2))
+				[[ -n $cachesize && $cachesize =~ ^[0-9]+$ && $cachesize -gt 0 ]] || local cachesize=90
+				
+				local dom=$(echo $domain | sed "s/[^0-9A-Za-z]/_/g")
+				echo "fastcgi_cache_path /run/nginx-cache/${dom}${subname} levels=1:2 keys_zone=${dom}${subname}:50m max_size=${cachesize}m inactive=7d;" >> /etc/nginx/conf.d/webinoly.conf
+				
+				echo -e "# Webinoly Custom FastCGI Cache File \n" >> /etc/nginx/apps.d/$domain$subname-${fn}.conf
+				sudo cat /etc/nginx/common/wpfc.conf >> /etc/nginx/apps.d/$domain$subname-${fn}.conf
+				sudo sed -i '/# WPFC NGINX CONFIGURATION/,/# Use cached or actual file if they exists/{/.*/d}' /etc/nginx/apps.d/$domain$subname-${fn}.conf
+				sudo sed -i '/fastcgi_cache WORDPRESS;/r /etc/nginx/conf.d/fastcgi.conf' /etc/nginx/apps.d/$domain$subname-${fn}.conf
+				sudo sed -i '/# FastCGI cache settings/,/fastcgi_cache_path /{/.*/d}' /etc/nginx/apps.d/$domain$subname-${fn}.conf
+				sudo sed -i "/fastcgi_cache WORDPRESS;/c \	fastcgi_cache ${dom}${subname};" /etc/nginx/apps.d/$domain$subname-${fn}.conf
+				sudo sed -i "s/ \$skip_cache/ \$skip_cache_${dom}${subname}/g" /etc/nginx/apps.d/$domain$subname-${fn}.conf
+				sudo sed -i '/^fastcgi_/s/^/	/' /etc/nginx/apps.d/$domain$subname-${fn}.conf
+				
+				sudo sed -i "/^# Webinoly Custom FastCGI Cache File /a include apps.d/${domain}${subname}*site_custom_cache.conf;" /etc/nginx/apps.d/$domain$subname-${fn}.conf
+				sudo sed -i "/^# Webinoly Custom FastCGI Cache File /a set \$skip_cache_${dom}${subname} 0;" /etc/nginx/apps.d/$domain$subname-${fn}.conf
+				
+				if [[ -n $subfolder ]]; then
+					sudo sed -i "/^location \/ {/c location $subfolder/ {" /etc/nginx/apps.d/$domain$subname-${fn}.conf
+					sudo sed -i "/^location ~\* /c location ~* $subfolder/\.*\\\.php\$ {" /etc/nginx/apps.d/$domain$subname-${fn}.conf
+					sudo sed -i "s#/index.php#$subfolder/index.php#" /etc/nginx/apps.d/$domain$subname-${fn}.conf
+					[[ $(is_wp $domain $subfolder) == "true" ]] && sudo sed -i "/^# Webinoly Custom FastCGI Cache File /a include apps.d/$domain$subname-wpcommon.conf;" /etc/nginx/apps.d/$domain$subname-${fn}.conf
+				fi
+				
+				echo "${gre}${dim}A new FastCGI Cache configuration file has been created!${end}"
+			else
+				echo "${gre}${dim}FastCGI Cache configuration file found!${end}"
+			fi
+			
+			[[ -n $times && $times != "true" ]] && config_fastcgi_cache -site $times
+			
+			echo "${gre}"
+			echo "Custom FastCGI Cache in${blu} $domain$subfolder ${gre}has been successfully enabled! ${end}"
+			echo "${end}"
+		else
+			echo "${gre}FastCGI Cache is already enabled on your site${blu} $domain$subfolder${end}"
 		fi
 	else
 		echo "${red}[ERROR] Invalid value for cache! ${end}"
@@ -1276,39 +1468,61 @@ yoast_sitemap() {
 }
 
 
-clone_wp_site() {
-	if [[ $(is_wp_installed $clone_from $subfolder) != "true" ]]; then
-		echo "${dim}[INFO] WordPress is empty and still not configured in ${clone_from}${subfolder} site!${end}"
-	fi
+cloning_site() {
 	if [[ -f /etc/nginx/sites-available/$domain && $overwrite == "on" ]]; then
 		echo "${blu}Site already exists! ${dim} Overwriting...${end}"
 		[[ -z $subfolder ]] && sudo site $domain -delete=force > /dev/null 2>&1 || sudo site $domain -subfolder=$subfolder -delete=force > /dev/null 2>&1
 	fi
 	
 	if [[ -n $subfolder ]]; then
-		sudo cp /etc/nginx/apps.d/$clone_from$subname-php.conf /etc/nginx/apps.d/$domain$subname-php.conf
-		sudo cp /etc/nginx/apps.d/$clone_from$subname-wpfc.conf /etc/nginx/apps.d/$domain$subname-wpfc.conf
-		sudo cp /etc/nginx/apps.d/$clone_from$subname-wpcommon.conf /etc/nginx/apps.d/$domain$subname-wpcommon.conf
-		sudo cp /etc/nginx/apps.d/$clone_from$subname-wpcommon-noauth.conf /etc/nginx/apps.d/$domain$subname-wpcommon-noauth.conf
-		sudo cp /etc/nginx/apps.d/$clone_from$subname-yoast-sitemap.conf /etc/nginx/apps.d/$domain$subname-yoast-sitemap.conf
-		
-		sudo sed -i "s/$clone_from/$domain/g" /etc/nginx/apps.d/$domain$subname-php.conf
-		sudo sed -i "s/$clone_from/$domain/g" /etc/nginx/apps.d/$domain$subname-wpfc.conf
-		
+		local subtype=$(is_subfolder $clone_from $subfolder)
 		[[ ! -f /etc/nginx/sites-available/$domain ]] && create_empty_site
 		
-		local dest=$( echo $subfolder | rev | cut -f 2- -d "/" -s | rev )
-		sudo mkdir -p /var/www/$domain/htdocs$dest
-		sudo cp -r /var/www/$clone_from/htdocs$subfolder /var/www/$domain/htdocs$dest
+		if [[ $subtype == "wp" ]]; then
+			echo "${blu}${dim}Cloning WP subfolder...${end}"
+			sudo cp /etc/nginx/apps.d/$clone_from$subname-php.conf /etc/nginx/apps.d/$domain$subname-php.conf
+			sudo cp /etc/nginx/apps.d/$clone_from$subname-wpfc.conf /etc/nginx/apps.d/$domain$subname-wpfc.conf
+			sudo cp /etc/nginx/apps.d/$clone_from$subname-wpcommon.conf /etc/nginx/apps.d/$domain$subname-wpcommon.conf
+			sudo cp /etc/nginx/apps.d/$clone_from$subname-wpcommon-noauth.conf /etc/nginx/apps.d/$domain$subname-wpcommon-noauth.conf
+			sudo cp /etc/nginx/apps.d/$clone_from$subname-yoast-sitemap.conf /etc/nginx/apps.d/$domain$subname-yoast-sitemap.conf			
+			sudo sed -i "s/$clone_from/$domain/g" /etc/nginx/apps.d/$domain$subname-php.conf
+			sudo sed -i "s/$clone_from/$domain/g" /etc/nginx/apps.d/$domain$subname-wpfc.conf
+			sudo sed -i "/# WebinolyCustom$/a \	include apps.d/$domain$subname-php.conf;" /etc/nginx/sites-available/$domain
+		elif [[ $subtype == "php" ]]; then
+			echo "${blu}${dim}Cloning PHP subfolder...${end}"
+			if [[ -f /etc/nginx/apps.d/$clone_from$subname-php.conf ]]; then
+				sudo cp /etc/nginx/apps.d/$clone_from$subname-php.conf /etc/nginx/apps.d/$domain$subname-php.conf
+				sudo sed -i "s/$clone_from/$domain/g" /etc/nginx/apps.d/$domain$subname-php.conf
+				sudo sed -i "/# WebinolyCustom$/a \	include apps.d/$domain$subname-php.conf;" /etc/nginx/sites-available/$domain
+			elif [[ -f /etc/nginx/apps.d/$clone_from$subname-phpx.conf ]]; then
+				sudo cp /etc/nginx/apps.d/$clone_from$subname-phpx.conf /etc/nginx/apps.d/$domain$subname-phpx.conf
+				sudo sed -i "s/$clone_from/$domain/g" /etc/nginx/apps.d/$domain$subname-phpx.conf
+				sudo sed -i "/# WebinolyCustom$/a \	include apps.d/$domain$subname-phpx.conf;" /etc/nginx/sites-available/$domain
+			fi
+		elif [[ $subtype == "html" ]]; then
+			echo "${blu}${dim}Cloning HTML subfolder...${end}"
+		elif [[ $subtype == "proxy" ]]; then
+			echo "${blu}${dim}Cloning PROXY subfolder...${end}"
+			sudo cp /etc/nginx/apps.d/$clone_from$subname-proxy.conf /etc/nginx/apps.d/$domain$subname-proxy.conf
+			sudo sed -i "/# WebinolyCustom$/a \	include apps.d/$domain$subname-proxy.conf;" /etc/nginx/sites-available/$domain
+		elif [[ $subtype == "true" ]]; then
+			echo "${blu}${dim}Cloning subfolder data only...${end}"
+		else
+			echo "${red}${dim}[ERROR] Unexpected error, subfolder type is undetermined!${end}"
+		fi
+		
+		if [[ -d /var/www/$clone_from/htdocs$subfolder ]]; then
+			local dest=$( echo $subfolder | rev | cut -f 2- -d "/" -s | rev )
+			sudo mkdir -p /var/www/$domain/htdocs$dest
+			sudo cp -r /var/www/$clone_from/htdocs$subfolder /var/www/$domain/htdocs$dest
+		fi
 	else
-		sudo cp -r /var/www/$clone_from /var/www/$domain
+		[[ -d /var/www/$clone_from ]] && sudo cp -r /var/www/$clone_from /var/www/$domain
 	fi
 
-	sudo chown -R www-data:www-data /var/www/$domain
+	[[ -d /var/www/$domain ]] && sudo chown -R www-data:www-data /var/www/$domain
 
-	if [[ -n $subfolder ]]; then
-		sudo sed -i "/# WebinolyCustom$/a \	include apps.d/$domain$subname-php.conf;" /etc/nginx/sites-available/$domain
-	elif [[ -z $subfolder && ! -f /etc/nginx/sites-available/$domain ]]; then
+	if [[ -z $subfolder && ! -f /etc/nginx/sites-available/$domain ]]; then
 		sudo cp /etc/nginx/sites-available/$clone_from /etc/nginx/sites-available/$domain
 		sudo ln -s /etc/nginx/sites-available/$domain /etc/nginx/sites-enabled/$domain
 		sudo sed -i "s/$clone_from/$domain/g"  /etc/nginx/sites-available/$domain
@@ -1339,28 +1553,38 @@ clone_wp_site() {
 				fi
 			fi
 		done
-		
-	else
-		echo "${red}[ERROR] Unexpected error, site you're trying to clone already exists!${end}"
-		exit 1
 	fi
 
-	local dom=$(echo $domain$subfolder | sed "s/[^0-9A-Za-z]/_/g")
-	local AUTOGENPASS_WPDB=`pwgen -s -1 16`
-	
-	wp_config_write $domain DB_NAME \'$dom\' $subfolder
-	wp_config_write $domain DB_USER \'$dom\' $subfolder
-	wp_config_write $domain DB_PASSWORD \'$AUTOGENPASS_WPDB\' $subfolder
-	wp_config_write $domain WP_CACHE_KEY_SALT \'wp_$domain$(echo $subfolder | sed "s/\//_/g")\' $subfolder
-	
-	if [[ $wp_dbhost == "localhost" ]]; then
-		site -mysql=[localhost,$dom,$dom,$AUTOGENPASS_WPDB] > /dev/null 2>&1
-		mysqldump -u admin -p$ADMIN_PASS $wp_dbname | mysql -u admin -p$ADMIN_PASS $dom
-		edit_wp_db_url $domain "http://${domain}${subfolder}" $subfolder
-	else
-		site -mysql=[$wp_dbhost,$dom,$dom,$AUTOGENPASS_WPDB,$extdb_user,$extdb_pass] > /dev/null 2>&1
-		mysqldump -h "$extdb_url" -P "$extdb_port" -u"$extdb_user" -p"$extdb_pass" $wp_dbname | mysql -h "$extdb_url" -P "$extdb_port" -u"$extdb_user" -p"$extdb_pass" $dom
-		edit_wp_db_url $domain "http://${domain}${subfolder}" $subfolder
+	# Only for WP sites
+	if [[ $iswpclone == "true" ]]; then
+		local dom=$(echo $domain$subfolder | sed "s/[^0-9A-Za-z]/_/g")
+		local AUTOGENPASS_WPDB=`pwgen -s -1 16`
+		
+		wp_config_write $domain DB_NAME \'$dom\' $subfolder
+		wp_config_write $domain DB_USER \'$dom\' $subfolder
+		wp_config_write $domain DB_PASSWORD \'$AUTOGENPASS_WPDB\' $subfolder
+		wp_config_write $domain WP_CACHE_KEY_SALT \'wp_$domain$(echo $subfolder | sed "s/\//_/g")\' $subfolder
+		
+		if [[ $wp_dbhost == "localhost" ]]; then
+			site -mysql=[localhost,$dom,$dom,$AUTOGENPASS_WPDB] > /dev/null 2>&1
+			mysqldump -u admin -p$ADMIN_PASS $wp_dbname | mysql -u admin -p$ADMIN_PASS $dom
+			edit_wp_db_url $domain "http://${domain}${subfolder}" $subfolder
+		else
+			site -mysql=[$wp_dbhost,$dom,$dom,$AUTOGENPASS_WPDB,$extdb_user,$extdb_pass] > /dev/null 2>&1
+			mysqldump -h "$extdb_url" -P "$extdb_port" -u"$extdb_user" -p"$extdb_pass" $wp_dbname | mysql -h "$extdb_url" -P "$extdb_port" -u"$extdb_user" -p"$extdb_pass" $dom
+			edit_wp_db_url $domain "http://${domain}${subfolder}" $subfolder
+		fi
+		
+		if [[ $replace_content != "off" ]]; then
+			replace_content="[http://$clone_from,http://$domain]" && wp_replace_content > /dev/null 2>&1
+			replace_content="[https://$clone_from,https://$domain]" && wp_replace_content > /dev/null 2>&1
+			# In case www is forced
+			replace_content="[http://www.$clone_from,http://$domain]" && wp_replace_content > /dev/null 2>&1
+			replace_content="[https://www.$clone_from,https://$domain]" && wp_replace_content > /dev/null 2>&1
+		fi
+		
+		[[ -n $env && -z $subfolder ]] && sudo site $domain -env=$env
+		[[ -n $env && -n $subfolder ]] && sudo site $domain -env=$env -subfolder=$subfolder
 	fi
 	
 	# Remove custom settings from cloned site
@@ -1369,17 +1593,7 @@ clone_wp_site() {
 	[[ $(conf_read default-site) == $clone_from ]] && remove_nginx_default_server $domain
 	conf_delete nginx-reload
 	
-	if [[ $replace_content != "off" ]]; then
-		replace_content="[http://$clone_from,http://$domain]" && wp_replace_content > /dev/null 2>&1
-		replace_content="[https://$clone_from,https://$domain]" && wp_replace_content > /dev/null 2>&1
-		# In case www is forced
-		replace_content="[http://www.$clone_from,http://$domain]" && wp_replace_content > /dev/null 2>&1
-		replace_content="[https://www.$clone_from,https://$domain]" && wp_replace_content > /dev/null 2>&1
-	fi
-	
 	echo "${gre}Site${blu} $domain$subfolder ${gre}is now a successfull clone of${blu} $clone_from$subfolder ${end}"
-	[[ -n $env && -z $subfolder ]] && sudo site $domain -env=$env
-	[[ -n $env && -n $subfolder ]] && sudo site $domain -env=$env -subfolder=$subfolder
 }
 
 
@@ -1456,11 +1670,11 @@ list_sites() {
 			[[ ${list,,} == "accesslog" && $(is_log $domi) != "true" ]] && continue
 			[[ ${list,,} == "noaccesslog" && $(is_log $domi) == "true" ]] && continue
 			
-			# Only WordPress options
-			[[ ${list,,} =~ ^(cache|nocache|adminauth|noadminauth|debug|nodebug|wpenv)$ && $(is_wp $domi) != "true" ]] && continue
+			[[ ${list,,} == "cache" && $(is_cache $domi) == "false" ]] && continue
+			[[ ${list,,} == "nocache" && -n $(is_cache $domi) && $(is_cache $domi) != "false" ]] && continue
 			
-			[[ ${list,,} == "cache" && $(is_wp_cache $domi) != "true" ]] && continue
-			[[ ${list,,} == "nocache" && $(is_wp_cache $domi) == "true" ]] && continue
+			# Only WordPress options
+			[[ ${list,,} =~ ^(adminauth|noadminauth|debug|nodebug|wpenv)$ && $(is_wp $domi) != "true" ]] && continue
 			
 			[[ ${list,,} == "adminauth" && $(is_wp_auth $domi) != "true" ]] && continue
 			[[ ${list,,} == "noadminauth" && $(is_wp_auth $domi) == "true" ]] && continue
@@ -1508,6 +1722,49 @@ list_sites() {
 }
 
 
+site_info_subfolder() {
+	local typesite=$(is_subfolder $domain $subfolder)
+	if [[ $typesite == "false" ]]; then
+		echo "${red}[ERROR] Subfolder not found! ${end}"
+		exit 1
+	fi
+	
+	echo ""
+	echo "${blu}Subfolder Type:${end} ${typesite^^}"
+	
+	[[ $typesite == "proxy" ]] || echo "${blu}Size:${end} $(sudo du -sh /var/www/$domain/htdocs$subfolder | cut -d"/" -f 1 -s)"
+	
+	if [[ $(is_cache $domain $subfolder) =~ ^(custom|proxy)$ ]]; then
+		local cache="Custom"
+		[[ $typesite =~ ^(php|proxy) ]] && echo "${blu}Cache:${end} $cache"
+	elif [[ $(is_cache $domain $subfolder) == "wp" ]]; then
+		local cache="true"
+	else
+		local cache="false"
+	fi
+	
+	if [[ $typesite == "wp" ]]; then
+		echo ""
+		echo "${blu}Cache:${end} $cache"
+		echo "${blu}Multisite:${end} $(is_wp_multisite $domain $subfolder)"
+		echo "${blu}WP Auth:${end} $(is_wp_auth $domain $subfolder)"
+		echo "${blu}Debug:${end} $(is_wp_debug $domain $subfolder)"
+	
+		[[ -n $(wp_config_read $domain WP_ENVIRONMENT_TYPE $subfolder) ]] && echo "${blu}Environment:${end} $(wp_config_read $domain WP_ENVIRONMENT_TYPE $subfolder)"
+		echo ""
+		
+		wp_conf_retrieve $domain $subfolder false
+		echo "${blu}Database:${end} $wp_dbhost"
+		echo "${blu}DB Name:${end} $wp_dbname"
+		echo "${blu}DB User:${end} $wp_dbuser"
+		echo "${blu}DB Prefix:${end} $wp_dbpref"
+	fi
+	
+	[[ $typesite == "proxy" ]] && echo "${blu}Source Server:${end} $(grep 'proxy_pass ' /etc/nginx/apps.d/$domain$subname-proxy.conf | head -1 | cut -d ' ' -f 2 -s | rev | cut -c 2- | rev)"
+	echo ""
+}
+
+
 site_info() {
 	local typesite=$(site_type $domain)
 	if [[ $typesite == "false" ]]; then
@@ -1525,23 +1782,34 @@ site_info() {
 		if [[ $(is_ssl $domain) == "true" && $(is_ssl_le $domain) == "true" && $(is_ssl_staging $domain) != "true" ]]; then
 			local ssl="Let's Encrypt"
 		elif [[ $(is_ssl $domain) == "true" && $(is_ssl_le $domain) == "true" && $(is_ssl_staging $domain) == "true" ]]; then
-			local ssl="Let's Encrypt (Staging)"
+			local ssl="Let's Encrypt ${dim}(Staging)"
 		elif [[ $(is_ssl $domain) == "true" && $(is_ssl_le $domain) != "true" ]]; then
 			local ssl="Custom"
 		else
 			local ssl="false"
 		fi
 		
-		echo "${blu}SSL:${end} $ssl"
+		[[ -f /etc/letsencrypt/renewal/${domain}.conf && $(grep -E "^must_staple.?=.?*+" /etc/letsencrypt/renewal/${domain}.conf | cut -f 2 -d '=' -s | sed 's/ //') =~ ^(True|true)$ ]] && ssl="${ssl}(Must-Staple)"
+		
+		echo "${blu}SSL:${end} ${ssl}${end}"
 		echo "${blu}Access Logs:${end} $(is_log $domain)"
 		echo "${blu}Force Redirect:${end} $(is_force_redirect $domain)"
 	fi
 	
-	[[ $typesite =~ ^(Forward|Parked|Reverse Proxy) ]] || echo "${blu}Size:${end} $(sudo du -sh /var/www/$domain | cut -d"/" -f 1 -s)"
+	[[ $typesite =~ ^(Forward|Parked|Reverse Proxy|Dedicated Reverse Proxy) ]] || echo "${blu}Size:${end} $(sudo du -sh /var/www/$domain | cut -d"/" -f 1 -s)"
+	
+	if [[ $(is_cache $domain) =~ ^(custom|proxy)$ ]]; then
+		local cache="Custom"
+		[[ $typesite =~ ^(PHP|Reverse Proxy|Dedicated Reverse Proxy) ]] && echo "${blu}Cache:${end} $cache"
+	elif [[ $(is_cache $domain) == "wp" ]]; then
+		local cache="true"
+	else
+		local cache="false"
+	fi
 	
 	if [[ $typesite == "WordPress" ]]; then
 		echo ""
-		echo "${blu}Cache:${end} $(is_wp_cache $domain)"
+		echo "${blu}Cache:${end} $cache"
 		echo "${blu}Multisite:${end} $(is_wp_multisite $domain)"
 		echo "${blu}WP Auth:${end} $(is_wp_auth $domain)"
 		echo "${blu}Debug:${end} $(is_wp_debug $domain)"
@@ -1549,7 +1817,7 @@ site_info() {
 		[[ -n $(wp_config_read $domain WP_ENVIRONMENT_TYPE $subfolder) ]] && echo "${blu}Environment:${end} $(wp_config_read $domain WP_ENVIRONMENT_TYPE $subfolder)"
 		echo ""
 		
-		wp_conf_retrieve $domain
+		wp_conf_retrieve $domain false false
 		echo "${blu}Database:${end} $wp_dbhost"
 		echo "${blu}DB Name:${end} $wp_dbname"
 		echo "${blu}DB User:${end} $wp_dbuser"
@@ -1557,11 +1825,11 @@ site_info() {
 	fi
 	
 	if [[ $typesite == "Reverse Proxy" ]]; then
-		echo "${blu}Source Server:${end} $(grep "proxy_pass " /etc/nginx/apps.d/$domain-proxy.conf | cut -d " " -f 2 -s | rev | cut -c 2- | rev)"
+		echo "${blu}Source Server:${end} $(grep 'proxy_pass ' /etc/nginx/apps.d/$domain-proxy.conf | head -1 | cut -d ' ' -f 2 -s | rev | cut -c 2- | rev)"
 	elif [[ $typesite == "Parked" ]]; then
-		echo "${blu}Main Site:${end} $(grep "root " /etc/nginx/sites-available/$domain | cut -d "/" -f 4 -s)"
+		echo "${blu}Main Site:${end} $(grep 'root ' /etc/nginx/sites-available/$domain | cut -d '/' -f 4 -s)"
 	elif [[ $typesite == "Forward" ]]; then
-		echo "${blu}Forwarded to:${end} $(grep "return 301 " /etc/nginx/sites-available/$domain | cut -d " " -f 3 -s | cut -d "$" -f 1 -s)"
+		echo "${blu}Forwarded to:${end} $(grep 'return 301 ' /etc/nginx/sites-available/$domain | cut -d ' ' -f 3 -s | cut -d '$' -f 1 -s)"
 	fi
 	echo ""
 }

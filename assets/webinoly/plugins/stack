@@ -68,15 +68,17 @@ if [[ -n $purge && ( -n $html || -n $nginx ) ]]; then
 			fi
 			
 			sudo service nginx stop
-			sudo apt -y purge nginx nginx-common
+			sudo apt -y purge nginx nginx-common # Common package is no longer installed, but we purge it in case of old stacks built before 1.14.0.
 			
-			[[ $(conf_read nginx-ppa) == "mainline" ]] && echo | sudo add-apt-repository --remove 'ppa:ondrej/nginx-mainline' || echo | sudo add-apt-repository --remove 'ppa:ondrej/nginx'
+			[[ $(conf_read nginx-ppa) == "mainline" ]] && sudo add-apt-repository --remove "deb https://nginx.org/packages/mainline/ubuntu/ focal nginx" || sudo add-apt-repository --remove "deb https://nginx.org/packages/ubuntu/ focal nginx"
+			sudo apt-key del 7BD9BF62
 			
 			api-events_update pn4
 			api-events_update pn5
 			
-			[[ $(check_osname) == "bionic" ]] && sudo apt -y purge certbot python-boto duplicity duply || sudo apt -y purge certbot python3-boto3 duplicity duply
-			[[ $(check_osname) == "bionic" ]] && echo | sudo add-apt-repository --remove 'ppa:certbot/certbot'
+			sudo snap remove certbot
+			[[ $(check_osname) == "bionic" ]] && sudo apt -y purge python-boto duplicity duply || sudo apt -y purge python3-boto3 duplicity duply
+			[[ -L /usr/bin/certbot ]] && sudo rm -rf /usr/bin/certbot
 			
 			# Remove SSL Cron
 			if [[ -f /var/spool/cron/crontabs/root ]]; then
@@ -134,7 +136,7 @@ elif [[ -n $purge && -n $php ]]; then
 			sudo service php*-fpm stop
 			ver=$(conf_read php-ver)
 			
-			sudo apt -y purge php${ver}-common php${ver}-cli php${ver}-fpm php${ver}-curl php${ver}-gd php${ver}-imap php${ver}-readline php${ver}-mysql php${ver}-mbstring php${ver}-bcmath php${ver}-mysql php${ver}-opcache php${ver}-zip php${ver}-xml php${ver}-soap php${ver}-imagick php${ver}-msgpack php${ver}-igbinary graphviz php-pear
+			sudo apt -y purge php${ver}-common php${ver}-cli php${ver}-fpm php${ver}-curl php${ver}-gd php${ver}-imap php${ver}-readline php${ver}-mysql php${ver}-mbstring php${ver}-bcmath php${ver}-mysql php${ver}-opcache php${ver}-zip php${ver}-xml php${ver}-soap php${ver}-imagick php${ver}-msgpack php${ver}-igbinary graphviz php-pear ghostscript
 			
 			sudo apt -y purge php${ver}-memcached php${ver}-memcache memcached
 			sudo apt -y purge redis-server php${ver}-redis postfix
@@ -147,6 +149,8 @@ elif [[ -n $purge && -n $php ]]; then
 			sudo apt -y autoremove
 			sudo rm -rf /etc/php
 			sudo rm /opt/webinoly/templates/source/*
+			sudo apt-key del E5267A6C #ondrej
+			sudo apt-key del C7917B12 #chrislea
 
 			# Remove sources
 			sudo rm -rf /opt/webinoly/templates/source/php.ini
