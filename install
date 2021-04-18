@@ -2,6 +2,7 @@
 
 # Get absolute path this script is in, for example: /home/$USER/bin
 SCRIPTPATH=$(dirname $(readlink -f "$0"))
+. $SCRIPTPATH/common
 
 echo -e "Installing system features\n"
 
@@ -95,14 +96,13 @@ if [ ! -d /opt/webinoly ]; then
   sudo chmod 755 /opt/webinoly/plugins/*
   sudo mv /opt/webinoly/plugins/* /usr/bin/
 
-  sudo -s source /opt/webinoly/lib/general
-
-  conf_write app-version $app_version
 
   ### <---
 
+  sudo -u root bash -c 'source /opt/webinoly/lib/general && webinoly -conf-value_app-version=$app_version'
   sudo webinoly -conf-value_max-mb-uploads=200
   sudo webinoly -conf-value_nginx-ppa=mainline
+
   sudo stack -lemp
 
   # Allow SFTP access to www-data user
@@ -130,7 +130,7 @@ if [ ! -d /opt/webinoly ]; then
   sudo -u root bash -c 'echo -e "\nfs.inotify.max_user_watches=524288\n" >> /etc/sysctl.conf'
   sudo sysctl -p &> /dev/null
 
-  echo -e "Make note of the above credentials, then run: sys install\n"
+  echo -e "\nMake note of the above credentials, then run: sys install\n"
 
   exit
 fi
