@@ -47,6 +47,7 @@ if [ ! -f ~/n/bin/yarn ]; then
   enter-when-ready
 
   npm install --global yarn
+  echo
 fi
 
 if [ ! -f ~/.yarn/bin/pm2 ]; then
