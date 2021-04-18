@@ -5,11 +5,18 @@ SCRIPTPATH=$(dirname $(readlink -f "$0"))
 
 sudo rm -rf /opt/webinoly/lib
 sudo rm -rf /opt/webinoly/plugins
+if [ -d /opt/webinoly/templates/source ]; then
+  sudo mv /opt/webinoly/templates/source /opt/webinoly/templates-source
+fi
 sudo rm -rf /opt/webinoly/templates
 
 sudo cp -r $SCRIPTPATH/assets/webinoly/lib /opt/webinoly
 sudo cp -r $SCRIPTPATH/assets/webinoly/plugins /opt/webinoly
 sudo cp -r $SCRIPTPATH/assets/webinoly/templates /opt/webinoly
+
+if [ -d /opt/webinoly/templates-source ]; then
+  sudo mv /opt/webinoly/templates-source /opt/webinoly/templates/source
+fi
 
 sudo mkdir -p /opt/webinoly/templates/source
 sudo find /opt/webinoly -type d -exec chmod 755 {} \;
