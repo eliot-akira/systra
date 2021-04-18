@@ -27,6 +27,15 @@ if [ -z "$SUBFOLDER" ]; then
 
   echo -e "\nSite installed at ~/apps/$DOMAIN_NAME"
 
+  echo -n "Prepare HTTPS (Y/n)? "
+  read answer
+  if [ "$answer" != "${answer#[Nn]}" ] ;then
+    # No
+    exit
+  fi
+
+  sudo site $DOMAIN_NAME -ssl=on
+
   exit
 fi
 

@@ -1,0 +1,3 @@
+#!/bin/bash
+
+sudo site -list-db

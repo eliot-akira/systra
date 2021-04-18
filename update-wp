@@ -1,0 +1,10 @@
+#!/bin/bash
+
+SCRIPTPATH=$(dirname $(readlink -f "$0"))
+. $SCRIPTPATH/common
+
+sudo webinoly -update-wp
+#sudo wget --timeout=15 -t 1 -qrO /var/www/wp.tar.gz https://wordpress.org/latest.tar.gz
+
+echo "Downloaded latest version of WordPress to /var/www/wp.tar.gz"
+echo "The package will be used to create new sites."

@@ -3,12 +3,19 @@
 echo "Usage: sys [command]"
 echo
 echo "Available commands:"
-echo "  install                   Install server features"
+echo "  install                   Install system"
+echo
 echo "  new [domain]              Create new site"
 echo "  new [domain] [folder]     Create new child site"
+echo
 echo "  delete [domain]           Delete site"
 echo "  delete [domain] [folder]  Delete child site"
+echo
 echo "  info                      Info about system"
 echo "  info [domain]             Info about site"
 echo "  info [domain] [folder]    Info about child site"
+echo
+echo "  list                      List sites"
+echo "  list-db                   List databases"
+echo "  list-cert                 List certificates"
 echo
