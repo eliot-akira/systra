@@ -77,6 +77,7 @@ if [ ! -d /opt/webinoly ]; then
   echo -e "Install web server - NGINX, MariaDB, PHP"
   enter-when-ready
 
+  ### Previously depended on external URL
   # wget -qO weby qrok.es/wy && sudo bash weby 0
   # sudo tar -xf $HOME/webinoly.tar -C /opt/webinoly
 
@@ -100,14 +101,32 @@ if [ ! -d /opt/webinoly ]; then
 
   ### <---
 
+
   sudo -u root bash -c 'source /opt/webinoly/lib/general && webinoly -conf-value_app-version=$app_version'
+
   sudo webinoly -conf-value_max-mb-uploads=200
   sudo webinoly -conf-value_nginx-ppa=mainline
+
+  # Disable XMLRPC - See assets/webinoly/lib/install, nginx_optim()
+  # Updates /etc/nginx/common/wpcommon.conf, /etc/nginx/common/wpcommon-noauth.conf
+  sudo webinoly -conf-value_xmlrpc=blocked
+
+
+  # Timezone is set automatically to local machine
+  # TODO: If empty, let user enter timezone
+
+  # List of timezones: https://www.php.net/manual/en/timezones.php
+  # ..Or run: ls /usr/share/zoneinfo
+  # sudo webinoly -timezone=Europe/Prague
+
 
   sudo stack -lemp
 
   # Allow SFTP access to www-data user
   sudo webinoly -login-www-data=on
+
+  # Disable HTTP Auth
+  sudo httpauth -wp-admin=off
 
   # Allow default user to edit served files
 
@@ -120,16 +139,11 @@ if [ ! -d /opt/webinoly ]; then
   sudo find /var/www -type d -exec chmod 2775 {} \;
   sudo find /var/www -type f -exec chmod ug+rw {} \;
 
-  # Timezone is set automatically to local machine
-
-  # List of timezones: https://www.php.net/manual/en/timezones.php
-  # ..Or run: ls /usr/share/zoneinfo
-  # sudo webinoly -timezone=Europe/Prague
-
   # Increase file watch limit - Helps with remote editing large folders
   # https://code.visualstudio.com/docs/setup/linux#_visual-studio-code-is-unable-to-watch-for-file-changes-in-this-large-workspace-error-enospc
   sudo -u root bash -c 'echo -e "\nfs.inotify.max_user_watches=524288\n" >> /etc/sysctl.conf'
   sudo sysctl -p &> /dev/null
+
 
   echo -e "\nMake note of the above credentials, then run: sys install\n"
 
