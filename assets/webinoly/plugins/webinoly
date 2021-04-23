@@ -28,10 +28,13 @@ elif [[ -n $conf_read ]]; then
 		echo "${red}[ERROR] Config file not found!${end}"
 		exit 1
 	fi
+	if [[ $conf_read == true ]]; then
+    cat /opt/webinoly/webinoly.conf
+  else
+    echo -n $(grep -w "^${conf_read}:.*" /opt/webinoly/webinoly.conf | cut -f 2 -d ':')
+  fi
 
-	local val=$(grep -w "^${conf_read}:.*" /opt/webinoly/webinoly.conf | cut -f 2 -d ':')
-	echo $val
-
+  nginx_not="true" # Nginx-Reload not-needed.
 
 elif [[ -n $server_reset ]]; then
 	api-events_update wy2
