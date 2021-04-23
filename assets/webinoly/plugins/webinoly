@@ -20,6 +20,18 @@ elif [[ -n $update_wp ]]; then
 	wp_package_update
 	nginx_not="true" # Nginx-Reload not-needed.
 
+elif [[ -n $conf_read ]]; then
+
+  # Based on lib/general, conf_read()
+
+	if [[ ! -f /opt/webinoly/webinoly.conf ]]; then
+		echo "${red}[ERROR] Config file not found!${end}"
+		exit 1
+	fi
+
+	local val=$(grep -w "^${conf_read}:.*" /opt/webinoly/webinoly.conf | cut -f 2 -d ':')
+	echo $val
+
 
 elif [[ -n $server_reset ]]; then
 	api-events_update wy2
