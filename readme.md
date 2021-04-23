@@ -1,6 +1,6 @@
 # Systra
 
-Server management script based on [Webinoly](https://webinoly.com/en/)
+Server management script based on [Webinoly](https://github.com/QROkes/webinoly)
 
 - Requires: Ubuntu 18.04 or 20.04
 - Includes: NGINX, MariaDB, PHP, Node.js, Composer, Yarn, PM2
