@@ -3,7 +3,7 @@
 # Site Manager Plugin (Create, delete and de/activate)
 # Syntax: site <domain> <option> <argument>
 # Options: -html, -php, -mysql, -wp, -parked, -proxy, -empty, -on, -off, -delete, -delete-all, -list, -cache, -ssl, -force-redirect, -yoast-sitemap, -multisite-convert, -clone-from, -replace-content, -redirection, -forward, -info, -env
-# Arguments: -cache, -root, -root-path, -subdomain, -ignore-ssl, -wildcard, -raw, -external-db, -revoke, -ssl-crt, -ssl-key, -ssl-ocsp, -subfolder, -from, -to, -http-code, -regex, -manual, -overwrite, -wp-cache-plugins, -dedicated-reverse-proxy, -must-staple, -times, -skip-cache, -skip-cookie-cache, -query-string-cache, -query-string-never-cache, -reset
+# Arguments: -cache, -root, -root-path, -subdomain, -ignore-ssl, -wildcard, -raw, -external-db, -revoke, -ssl-crt, -ssl-key, -ssl-ocsp, -subfolder, -from, -to, -http-code, -regex, -manual, -overwrite, -wp-cache-plugins, -dedicated-reverse-proxy, -must-staple, -cache-valid, -skip-cache, -skip-cookie-cache, -query-string-cache, -query-string-never-cache, -query-string-cache-default, -reset
 
 # shopt is necessary for this kind !(html|22222) of patterns
 shopt -s extglob
@@ -12,7 +12,7 @@ source /opt/webinoly/lib/general
 source /opt/webinoly/lib/sites
 check_for_parameters $@
 api-events_update sis
-check_for_nginx -ask
+[[ -z $empty_param && -z $h && -z $H && -z $help ]] && check_for_nginx -ask
 
 
 # Evaluate if site to create is WP ( 0 = noWP, 1 = WP ask, 2 = WP default, 3 = WP unattended, 4 = MySQL default, 5 = MySQL unattended )
@@ -346,10 +346,13 @@ elif [[ -n $ssl ]]; then
 			elif [[ ! -d /etc/letsencrypt/live/$add_to_wildcard ]]; then
 				echo "${red}[ERROR] Wildcard Cert not found!${end}"
 				exit 1
+			elif [[ $(is_ssl_wildcard $add_to_wildcard) != "true" ]]; then
+				echo "${red}[ERROR] Seem like you are trying to use a cert that is not Wildcard!${end}"
+				exit 1
 			elif [[ $domain == *."$add_to_wildcard" ]]; then
 				ssl_nginx
 				[[ $(is_wp $domain) == "true" ]] && edit_wp_db_url $domain "https://${domain}"
-				echo "${gre}Your site ${blu}- $domain -${gre} have been successfully added to the ${blu}- $add_to_wildcard -${gre} wildcard cert.${end}"
+				echo "${gre}Your site${blu} $domain ${gre}have been successfully added to the${blu} $add_to_wildcard ${gre}wildcard cert.${end}"
 			else
 				echo "${red}[ERROR] Seems like your site is not a valid subdomain!${end}"
 				exit 1
@@ -453,6 +456,8 @@ elif [[ -n $info && -f /etc/nginx/sites-available/$domain ]]; then
 	nginx_not="true" # Nginx-Reload not-needed.
 	
 
+elif [[ -n $help || -n $h || -n $H || $empty_param == "true" ]]; then
+	help_message
 # Catch ERROR 
 elif [[ -n $domain && ! -f /etc/nginx/sites-available/$domain ]]; then
 	echo "${red}[ERROR] Site${blu} $domain ${red}doesn't exists, please enter a valid domain name!${end}"

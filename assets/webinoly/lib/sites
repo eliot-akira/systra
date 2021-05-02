@@ -1045,6 +1045,9 @@ wp_multisite_convertion() {
 		if [[ $passed == "subdomain" ]]; then
 			wp_config_write $domain SUBDOMAIN_INSTALL true $subfolder
 			sudo sed -i "/server_name /c \	server_name $domain *.$domain;" /etc/nginx/sites-available/$domain
+			
+			[[ -f /etc/letsencrypt/renewal/${domain}.conf && $(is_ssl_wildcard $domain) != "true" ]] && echo "${dim}[WARNING] A Wildcard SSL Cert is recommended, a cert was found but seems like it's not wildcard!${end}"
+			
 			echo "${gre}Subdomain Multisite configuration has been successfully completed!${end}"
 		elif [[ $passed == "subdirectory" ]]; then
 			wp_config_write $domain SUBDOMAIN_INSTALL false $subfolder
@@ -1228,6 +1231,36 @@ full_empty_not_allowed() {
 }
 
 
+query_string_cache_default() {
+	if [[ $(is_wp $domain $subfolder) == "true" && -f /etc/nginx/apps.d/$domain$subname-wpcache.conf ]]; then
+		local cachefile="/etc/nginx/apps.d/$domain$subname-wpcache.conf"
+	elif [[ $(is_php $domain $subfolder) == "true" && -f /etc/nginx/apps.d/$domain$subname-phpcache.conf ]]; then
+		local cachefile="/etc/nginx/apps.d/$domain$subname-phpcache.conf"
+	elif [[ $(is_proxy $domain $subfolder) == "true" && -f /etc/nginx/apps.d/$domain$subname-proxy.conf ]]; then
+		local cachefile="/etc/nginx/apps.d/$domain$subname-proxy.conf"
+	else
+		echo "${red}[ERROR] Custom Cache not found! ${dim}(Must be enabled at least once before you can add these custom rules)${end}"
+		exit 1
+	fi
+	
+	if ! [[ $query_string_cache_default =~ ^(all|never)$ ]]; then
+		echo "${red}[ERROR] Please, enter a valid value for Query-String Cache default!${dim} ('all' or 'never')${end}"
+		exit 1
+	elif [[ $query_string_cache_default == "all" ]]; then
+		sudo sed -i "/# CacheQueryStringDefault/,/# CacheRuleEnd/{/.*/d}" $cachefile
+		echo "${gre}Query-String Cache default successfully updated!${dim} (All will be cached by default, except for individual rules if added)${end}"
+	elif [[ $query_string_cache_default == "never" ]]; then
+		if [[ -z $(grep -F "# CacheQueryStringDefault" $cachefile) ]]; then
+			local mark="_$(echo $domain | sed "s/[^0-9A-Za-z]/_/g")${subname}"
+			sudo sed -i "/set \$skip_cache${mark} 0;/a # CacheQueryStringDefault\nif (\$query_string) {\n	set \$skip_cache${mark} 1;\n}\n# CacheRuleEnd" $cachefile
+			echo "${gre}Query-String Cache default successfully updated!${dim} (Never will be cached, except for individual rules if added)${end}"
+		else
+			echo "${gre}Query-String (Never) Cache default is already enabled!${end}"
+		fi
+	fi
+}
+
+
 wp_cache() {
 	if [[ $cache == "off" ]]; then
 		api-events_update si9
@@ -1264,6 +1297,8 @@ wp_cache() {
 			fi
 			
 			echo "${gre}Custom FastCGI Cache in${blu} $domain ${gre}has been disabled!${end}"
+			[[ -n $reset && -n $subfolder ]] && site $domain -cache=custom -reset -subfolder=$subfolder
+			[[ -n $reset && -z $subfolder ]] && site $domain -cache=custom -reset
 		elif [[ $(is_cache $domain $subfolder) == "proxy" ]]; then
 			sudo sed -i "/proxy_cache .*;/c \	proxy_cache off;" /etc/nginx/apps.d/$domain$subname-proxy.conf
 			echo "${gre}Proxy Cache in${blu} $domain$subfolder ${gre}has been disabled!${end}"
@@ -1342,8 +1377,11 @@ wp_cache() {
 			[[ -f /etc/nginx/conf.d/webinoly.conf && ! -s /etc/nginx/conf.d/webinoly.conf ]] && sudo rm /etc/nginx/conf.d/webinoly.conf
 		elif [[ -n $query_string_never_cache || $query_string_cache || $skip_cache || -n $skip_cookie_cache ]]; then
 			custom_cache_global -site
-		elif [[ -n $times ]]; then
-			config_fastcgi_cache -site $times
+		elif [[ -n $query_string_cache_default ]]; then
+			query_string_cache_default
+		elif [[ -n $cache_valid || -n $times ]]; then
+			[[ -n $times && -z $cache_valid ]] && cache_valid=$times  # Will be removed!
+			config_fastcgi_cache -site $cache_valid
 		elif [[ $(is_cache $domain $subfolder) == "false" && $(is_proxy $domain $subfolder) == "true" && -n $(grep -F "# WebinolyProxyCacheStart" /etc/nginx/apps.d/$domain$subname-proxy.conf) ]]; then
 			sudo sed -i "/proxy_cache .*;/c \	proxy_cache $(echo $domain | sed "s/[^0-9A-Za-z]/_/g")${subname};" /etc/nginx/apps.d/$domain$subname-proxy.conf
 			echo "${gre}Custom Proxy Cache in${blu} $domain$subfolder ${gre}has been successfully enabled! ${end}"
@@ -1393,8 +1431,17 @@ wp_cache() {
 				echo "fastcgi_cache_path /run/nginx-cache/${dom}${subname} levels=1:2 keys_zone=${dom}${subname}:50m max_size=${cachesize}m inactive=7d;" >> /etc/nginx/conf.d/webinoly.conf
 				
 				echo -e "# Webinoly Custom FastCGI Cache File \n" >> /etc/nginx/apps.d/$domain$subname-${fn}.conf
-				sudo cat /etc/nginx/common/wpfc.conf >> /etc/nginx/apps.d/$domain$subname-${fn}.conf
-				sudo sed -i '/# WPFC NGINX CONFIGURATION/,/# Use cached or actual file if they exists/{/.*/d}' /etc/nginx/apps.d/$domain$subname-${fn}.conf
+				
+				if [[ $fn == "phpcache" && $(conf_read php-info) != "false" ]]; then
+					sudo cat /etc/nginx/common/phpx.conf >> /etc/nginx/apps.d/$domain$subname-${fn}.conf
+				else
+					sudo cat /etc/nginx/common/php.conf >> /etc/nginx/apps.d/$domain$subname-${fn}.conf
+				fi
+				
+				sudo sed -i '/# PHP NGINX CONFIGURATION/,/# DO NOT MODIFY, ALL/{/.*/d}' /etc/nginx/apps.d/$domain$subname-${fn}.conf
+				sudo sed -i "/fastcgi_pass php;/a	fastcgi_cache WORDPRESS;" /etc/nginx/apps.d/$domain$subname-${fn}.conf
+				sudo sed -i "/fastcgi_pass php;/a	fastcgi_no_cache \$skip_cache;" /etc/nginx/apps.d/$domain$subname-${fn}.conf
+				sudo sed -i "/fastcgi_pass php;/a	fastcgi_cache_bypass \$skip_cache;" /etc/nginx/apps.d/$domain$subname-${fn}.conf
 				sudo sed -i '/fastcgi_cache WORDPRESS;/r /etc/nginx/conf.d/fastcgi.conf' /etc/nginx/apps.d/$domain$subname-${fn}.conf
 				sudo sed -i '/# FastCGI cache settings/,/fastcgi_cache_path /{/.*/d}' /etc/nginx/apps.d/$domain$subname-${fn}.conf
 				sudo sed -i "/fastcgi_cache WORDPRESS;/c \	fastcgi_cache ${dom}${subname};" /etc/nginx/apps.d/$domain$subname-${fn}.conf
@@ -1416,7 +1463,8 @@ wp_cache() {
 				echo "${gre}${dim}FastCGI Cache configuration file found!${end}"
 			fi
 			
-			[[ -n $times && $times != "true" ]] && config_fastcgi_cache -site $times
+			[[ -n $times && $times != "true" ]] && config_fastcgi_cache -site $times   # Will be removed!
+			[[ -n $cache_valid && $cache_valid != "true" && -z $times ]] && config_fastcgi_cache -site $cache_valid
 			
 			echo "${gre}"
 			echo "Custom FastCGI Cache in${blu} $domain$subfolder ${gre}has been successfully enabled! ${end}"

@@ -4,7 +4,7 @@
 # Prevent 'tput' errors when running from Cron
 [[ -z $TERM || $TERM == "unknown" || $TERM == "dumb" ]] && export TERM=dumb
 
-readonly app_version="1.14.0"
+readonly app_version="1.14.1"
 readonly svr_version="1.6"
 readonly os_ubuntu_supported=(bionic focal)
 readonly php_supported=(7.2 7.3 7.4 8.0)
@@ -59,8 +59,8 @@ conf_write() {
 # ***********************************************
 # Useful variables   ****************************
 # ***********************************************
-readonly ADMIN_PASS=$( echo $(conf_read mysql-admin) | openssl enc -d -a -salt )
-
+ADMIN_PASS=$( echo $(conf_read mysql-admin) | openssl enc -d -a -salt )
+[[ -z $ADMIN_PASS ]] && readonly ADMIN_PASS="dUmb" || readonly ADMIN_PASS=$ADMIN_PASS # Never empty, prevent asking password!
 
 
 
@@ -180,8 +180,11 @@ check_for_mysql_client() {
 
 
 check_mysql_connection() {
-	if [[ -n $1 && -n $2 && -n $3 && -n $4 && $(conf_read mysql-client) == "true"  ]]; then
-		sudo mysql --connect-timeout=10 -h "$1" -P "$2" -u"$3" -p"$4" -e "quit"
+	local query="quit"
+
+	if [[ -n $1 && ${1,,} != "localhost" && -n $2 && -n $3 && -n $4 && $(conf_read mysql-client) == "true"  ]]; then
+		[[ -n $5 ]] && local query="use $5"
+		sudo mysql --connect-timeout=10 -h "$1" -P "$2" -u"$3" -p"$4" -e "$query"
 		if [[ $? != "0" ]]; then
 			echo "${red}============================================" >&2
 			echo "    [Error]  Database conection failed." >&2
@@ -196,12 +199,13 @@ check_mysql_connection() {
 		if [[ -n $2 && -n $3 ]]; then
 			local dbu=$2
 			local dbp=$3
+			[[ -n $4 ]] && local query="use $4"
 		else
 			local dbu="admin"
 			local dbp=$ADMIN_PASS
 		fi
 		
-		sudo mysql --connect-timeout=10 --user=$dbu -p$dbp -e "quit"
+		sudo mysql --connect-timeout=10 --user=$dbu -p$dbp -e "$query"
 		if [[ $? != "0" ]]; then
 			echo "${red}============================================" >&2
 			echo "    [Error]  Database conection failed." >&2
@@ -601,15 +605,14 @@ is_url() {
 is_ssl() {
 	[[ -f /etc/nginx/sites-available/$1 && -n $(sed -n -e '/WebinolyNginxServerStart/,$p' /etc/nginx/sites-available/$1 | grep -F "ssl_certificate_key") ]] && echo "true" || echo "false"
 }
-
-
 is_ssl_le() {
 	[[ -f /etc/nginx/sites-available/$1 && -n $(sed -n -e '/WebinolyNginxServerStart/,$p' /etc/nginx/sites-available/$1 | grep -F "ssl_certificate_key /etc/letsencrypt/live/") && -z $(grep -F "WebinolySSLCustomCert" /etc/nginx/sites-available/$1) ]] && echo "true" || echo "false"
 }
-
-
 is_ssl_staging() {
 	[[ -f /etc/letsencrypt/renewal/$1.conf && -n $(grep -E "^server = " /etc/letsencrypt/renewal/$1.conf | cut -d'=' -f 2 -s | grep -F "acme-staging-") ]] && echo "true" || echo "false"
+}
+is_ssl_wildcard() {
+	[[ -f /etc/letsencrypt/renewal/$1.conf && -n $(sudo certbot certificates --cert-name $1 2>/dev/null | grep -E "Domains:.* \*.$1") ]] && echo "true" || echo "false"
 }
 
 
@@ -1045,10 +1048,11 @@ config_fastcgi_cache() {
 		fi
 		
 		local mainfile="/etc/nginx/conf.d/webinoly.conf"
-		local config_cache=$2
+		local cache_valid=$2
 	else
 		local timefile="/etc/nginx/conf.d/fastcgi.conf"
 		local mainfile="/etc/nginx/conf.d/fastcgi.conf"
+		[[ -n $config_cache && -z $cache_valid ]] && cache_valid=$config_cache  # Will be removed!
 	fi
 	
 
@@ -1072,7 +1076,7 @@ config_fastcgi_cache() {
 	fi
 
 	
-	if [[ $config_cache == true ]]; then
+	if [[ $cache_valid == true ]]; then
 		echo "${gre}"
 		echo "**********************************************************************"
 		echo "*************      Set Nginx Cache new time values      **************"
@@ -1091,12 +1095,12 @@ config_fastcgi_cache() {
 		read -p "   Set new value: " oth
 		oth=${oth:-$othval}
 		echo ""
-	elif [[ $(echo "${config_cache}" | cut -c-1) == "[" && $(echo "${config_cache}" | rev | cut -c-1) == "]" ]]; then
-		custombegin=$(echo "${config_cache}" | cut -c-1)
-		customlast=$(echo "${config_cache}" | rev | cut -c-1)
+	elif [[ $(echo "${cache_valid}" | cut -c-1) == "[" && $(echo "${cache_valid}" | rev | cut -c-1) == "]" ]]; then
+		custombegin=$(echo "${cache_valid}" | cut -c-1)
+		customlast=$(echo "${cache_valid}" | rev | cut -c-1)
 		
 		# No need for check var lenght to prevent errors, the previous condition is enough in this case.
-		cachedata=${config_cache:1:-1}
+		cachedata=${cache_valid:1:-1}
 			
 		hit=$(echo "${cachedata}" | cut -d',' -f 1 )
 		ina=$(echo "${cachedata}" | cut -d',' -f 2 )
@@ -1302,4 +1306,36 @@ if (\$http_cookie $sign $value) {
 	fi
 }
 
+
+smtp_backup() {
+	if [[ $(conf_read smtp) == "true" ]]; then
+		sudo touch /var/www/webinoly_backup_smtp
+		echo "$(sudo sed -n 1p /etc/mailname) $(sudo sed -n 1p /etc/postfix/sasl_passwd)" > /var/www/webinoly_backup_smtp
+	fi
+}
+smtp_backup_recovery() {
+	if [[ -s /var/www/webinoly_backup_smtp ]]; then
+		local smtpdata=$(sudo sed -n 1p /var/www/webinoly_backup_smtp)
+		local main=$(echo $smtpdata | cut -d' ' -f 1 -s)
+		local host=$(echo $smtpdata | cut -d' ' -f 2 -s | cut -d':' -f 1 -s)
+		local user=$(echo $smtpdata | cut -d' ' -f 3 -s | cut -d':' -f 1 -s)
+		local pass=$(echo $smtpdata | cut -d' ' -f 3 -s | cut -d':' -f 2 -s)
+		sudo rm -rf /var/www/webinoly_backup_smtp
+		
+		if [[ -n $host && -n $user && -n $pass && -n $main ]]; then
+			sudo webinoly -smtp=[$host,$user,$pass,$main]
+		else
+			echo "${red}[ERROR] SMTP Configuration recovery failed! ${end}"
+		fi
+	fi
+}
+
+
+help_message() {
+	echo ""
+	echo "${blu}${bol}Thanks for using Webinoly!${end}"
+	echo "${blu}We have put a lot of time and effort into creating the most awesome, detailed and extensive documentation just for you."
+	echo "${dim}Link: https://webinoly.com/en/documentation/ ${end}"
+	echo ""
+}
 

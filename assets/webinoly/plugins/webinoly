@@ -2,7 +2,7 @@
 
 # Webinoly Server Manager Plugin
 # Syntax: webinoly <option> <argument>
-# Options: -update, -server-reset, -verify, -dbpass, -tools-port, -login-www-data, -config-cache, -uninstall, -info, -external-sources-update, -clear-cache, -version, -blockip, -conf-value_, -default-site, -tools-site, -mysql-password, -smtp, -backup, -aws-s3-credentials, -db-import, -send-to-s3, -header-referrer, -header-hsts, -header-csp, -skip-cache, -skip-cookie-cache, -query-string-cache, -query-string-never-cache, -email, -external-db-save, -export, -import
+# Options: -update, -server-reset, -verify, -dbpass, -tools-port, -login-www-data, -cache-valid, -uninstall, -info, -external-sources-update, -clear-cache, -version, -blockip, -conf-value_, -default-site, -tools-site, -mysql-password, -smtp, -backup, -aws-s3-credentials, -db-import, -send-to-s3, -header-referrer, -header-hsts, -header-csp, -header-permission-policy, -skip-cache, -skip-cookie-cache, -query-string-cache, -query-string-never-cache, -email, -external-db-save, -export, -import
 # Arguments: -raw, -profile, -list, -bucket, -source, -delete, -run, -restore, -wp, -destination, -date, -s3-european-buckets, info, -file, -add-db-pre, -no-recovery, -recalculate, -dbname, -skip-db, -filename, -overwrite
 
 source /opt/webinoly/lib/webin
@@ -48,7 +48,7 @@ elif [[ -n $server_reset ]]; then
 	
 	
 elif [[ -n $verify ]]; then
-	webinoly_verify
+	source /opt/webinoly/lib/verify
 	nginx_not="true" # Nginx-Reload not-needed.
 	
 	
@@ -72,7 +72,7 @@ elif [[ -n $login_www_data ]]; then
 	nginx_not="true" # Nginx-Reload not-needed.
 	
 	
-elif [[ -n $config_cache ]]; then
+elif [[ -n $cache_valid || -n $config_cache ]]; then
 	config_fastcgi_cache
 
 	
@@ -291,6 +291,8 @@ elif [[ -n $header_hsts ]]; then
 	http_header_hsts
 elif [[ -n $header_csp ]]; then
 	http_header_csp
+elif [[ -n $header_permission_policy ]]; then
+	http_header_permission_policy
 
 
 elif [[ -n $query_string_cache || -n $query_string_never_cache || -n $skip_cache || -n $skip_cookie_cache ]]; then
@@ -308,8 +310,10 @@ elif [[ -n $external_db_save ]]; then
 	nginx_not="true" # Nginx-Reload not-needed.
 	
 
+elif [[ -n $help || -n $h || -n $H || $empty_param == "true" ]]; then
+	help_message
 else
-	echo "${red}[ERROR] Please enter a valid option!${end}"
+	echo "${red}[ERROR] Please, enter a valid option!${end}"
 	exit 1
 fi
 
