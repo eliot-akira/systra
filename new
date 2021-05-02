@@ -19,19 +19,28 @@ if [ -z "$SUBFOLDER" ]; then
   echo "Creating site at $DOMAIN_NAME"
   enter-when-ready
 
-  # www -> root domain
+
+  # Create site - Redirect www -> root domain
   sudo site $DOMAIN_NAME -wp -force-redirect=root
+
+  # Don't put wp-admin under HTTP Basic Auth
   sudo httpauth $DOMAIN_NAME -wp-admin=off &> /dev/null
 
-  ln -s ~/www/$DOMAIN_NAME/htdocs ~/apps/$DOMAIN_NAME
+  ln -s /var/www/$DOMAIN_NAME/htdocs ~/apps/$DOMAIN_NAME
+
+  # Move wp-config to app root
+  sudo mv /var/www/$DOMAIN_NAME/wp-config.php ~/apps/$DOMAIN_NAME
+
+  # All new files and directories are owned by www-data group - and editable by $USER
+  sudo chmod -R g+rw /var/www/$DOMAIN_NAME/htdocs
 
   echo -e "\nSite installed at ~/apps/$DOMAIN_NAME"
+
 
   echo -n "Prepare HTTPS (Y/n)? "
   read answer
   if [ "$answer" != "${answer#[Nn]}" ] ;then
-    # No
-    exit
+    exit # No
   fi
 
   sudo site $DOMAIN_NAME -ssl=on
@@ -52,3 +61,8 @@ fi
 
 sudo site $DOMAIN_NAME -subfolder=/$SUBFOLDER -wp -force-redirect=root
 sudo httpauth $DOMAIN_NAME -subfolder=/$SUBFOLDER -wp-admin=off &> /dev/null
+
+# All new files and directories are owned by www-data group - and editable by $USER
+sudo chmod -R g+rw /var/www/$DOMAIN_NAME/htdocs/$SUBFOLDER
+
+echo -e "\nSite installed at ~/apps/$DOMAIN_NAME/$SUBFOLDER"
