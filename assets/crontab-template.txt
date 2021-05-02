@@ -1,5 +1,5 @@
-# MAILTO=__EMAIL__
-# MAILFROM=__EMAIL__
+MAILTO=__EMAIL__
+MAILFROM=__EMAIL__
 
 # Restart process manager on server reboot
 @reboot /home/__USER__/n/bin/node /home/__USER__/.yarn/bin/pm2 resurrect

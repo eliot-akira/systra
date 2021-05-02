@@ -17,58 +17,14 @@ if [ ! -f ~/.bash_aliases ]; then
   mkdir -p ~/apps
   mkdir -p ~/bin
 
-  if [ -d ~/bin/systra ]; then
-    rm -rf ~/bin/systra
-  fi
+  # if [ -d ~/bin/systra ]; then
+  #   rm -rf ~/bin/systra
+  # fi
 
   mv $SCRIPTPATH ~/bin/systra
   ln -s ~/bin/systra/sys ~/bin/sys
 
   echo -e "\nRun: source ~/.profile && sys install\n"
-  exit
-fi
-
-if [ ! -d ~/n ]; then
-
-  echo -e "Install Node.js - JavaScript runtime"
-  enter-when-ready
-
-  sudo apt-get update
-  sudo apt-get install build-essential
-  curl -L https://git.io/n-install | bash
-
-  echo -e "\nRun: source ~/.profile && sys install\n"
-  exit
-fi
-
-if [ ! -f ~/n/bin/yarn ]; then
-
-  echo -e "Install Yarn - Package manager for Node.js"
-  enter-when-ready
-
-  npm install --global yarn
-  echo
-fi
-
-if [ ! -f ~/.yarn/bin/pm2 ]; then
-
-  echo -e "Install PM2 - Process manager for Node.js"
-  enter-when-ready
-
-  yarn global add pm2
-
-  # https://pm2.keymetrics.io/docs/usage/startup/
-  pm2 startup
-
-  echo -e "\nRun the above command, then run: sys install\n"
-
-  # Copy crontab template, replace placeholders, load cron
-
-  cp $SCRIPTPATH/assets/crontab-template.txt ~/crontab-tmp.txt && sudo sed -i "s/__USER__/$USER/g" ~/crontab-tmp.txt && crontab ~/crontab-tmp.txt && rm ~/crontab-tmp.txt
-
-  # When upgrading Node.js, run:
-  # pm2 unstartup && pm2 startup
-
   exit
 fi
 
@@ -80,7 +36,6 @@ if [ ! -d /opt/webinoly ]; then
   ### Previously depended on external URL
   # wget -qO weby qrok.es/wy && sudo bash weby 0
   # sudo tar -xf $HOME/webinoly.tar -C /opt/webinoly
-
 
   sudo mkdir -p /opt/webinoly
 
@@ -98,27 +53,28 @@ if [ ! -d /opt/webinoly ]; then
   sudo chmod 755 /opt/webinoly/plugins/*
   sudo mv /opt/webinoly/plugins/* /usr/bin/
 
-
   ### <---
 
 
   sudo -u root bash -c 'source /opt/webinoly/lib/general && webinoly -conf-value_app-version=$app_version'
 
-  sudo webinoly -conf-value_max-mb-uploads=200
-  sudo webinoly -conf-value_nginx-ppa=mainline
+  sudo webinoly -conf-value_max-mb-uploads=200 &> /dev/null
+  sudo webinoly -conf-value_nginx-ppa=mainline &> /dev/null
 
   # Disable XMLRPC - See assets/webinoly/lib/install, nginx_optim()
   # Updates /etc/nginx/common/wpcommon.conf, /etc/nginx/common/wpcommon-noauth.conf
-  sudo webinoly -conf-value_xmlrpc=blocked
+  sudo webinoly -conf-value_xmlrpc=blocked &> /dev/null
 
 
-  # Timezone is set automatically to local machine
+  # Timezone is set automatically to local machine?
   # TODO: If empty, let user enter timezone
 
   # List of timezones: https://www.php.net/manual/en/timezones.php
   # ..Or run: ls /usr/share/zoneinfo
   # sudo webinoly -timezone=Europe/Prague
 
+  sudo webinoly -email # Mail address saved in /opt/webinoly/webinoly.conf
+  sudo webinoly -timezone
 
   sudo stack -lemp
 
@@ -170,7 +126,61 @@ if [ ! -f ~/bin/wp ]; then
   php wp-cli.phar --info
   chmod +x wp-cli.phar
   mv wp-cli.phar ~/bin/wp
-
+  echo
 fi
 
-echo -e "\nSystem fully installed.\n"
+if [ ! -d ~/n ]; then
+
+  echo -e "Install Node.js - JavaScript runtime"
+  enter-when-ready
+
+  sudo apt-get update
+  sudo apt-get install build-essential
+  curl -L https://git.io/n-install | bash
+
+  echo -e "\nRun: source ~/.profile && sys install\n"
+  exit
+fi
+
+if [ ! -f ~/n/bin/yarn ]; then
+
+  echo -e "Install Yarn - Package manager for Node.js"
+  enter-when-ready
+
+  npm install --global yarn
+  echo
+fi
+
+if [ ! -f ~/.yarn/bin/pm2 ]; then
+
+  echo -e "Install PM2 - Process manager for Node.js"
+  enter-when-ready
+
+  yarn global add pm2
+
+  # https://pm2.keymetrics.io/docs/usage/startup/
+  pm2 startup
+
+
+  # Copy crontab template, replace placeholders, load cron
+
+  cp $SCRIPTPATH/assets/crontab-template.txt ~/crontab-tmp.txt
+
+  EMAIL=$(sudo webinoly -conf-read=mail) # Mail address from /opt/webinoly/webinoly.conf
+
+  sed -i "s/__USER__/$USER/g" ~/crontab-tmp.txt
+  sed -i "s/__EMAIL__/$EMAIL/g" ~/crontab-tmp.txt
+
+  crontab ~/crontab-tmp.txt
+  rm ~/crontab-tmp.txt
+
+  # PM2 install ends with command: sudo env PATH=$PATH:/home/ubuntu/n/bin /home/ubuntu/.config/yarn/global/node_modules/pm2/bin/pm2 startup systemd -u ubuntu --hp /home/ubuntu
+  echo -e "\nRun the above command, then run: sys install\n"
+
+  # When upgrading Node.js, run:
+  # pm2 unstartup && pm2 startup
+
+  exit
+fi
+
+echo -e "System fully installed.\n"
