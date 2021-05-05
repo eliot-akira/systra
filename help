@@ -3,6 +3,7 @@
 echo "Usage: sys [command]"
 echo
 echo "Available commands:"
+echo
 echo "  install                   Install system"
 echo
 echo "  new [domain]              Create new site"
