@@ -39,22 +39,21 @@ if [ ! -d /opt/webinoly ]; then
 
   sudo mkdir -p /opt/webinoly
 
-  ### Below based on weby script --->
-
   sudo cp -r $SCRIPTPATH/assets/webinoly/lib /opt/webinoly
-  sudo cp -r $SCRIPTPATH/assets/webinoly/plugins /opt/webinoly
+  sudo cp -r $SCRIPTPATH/assets/webinoly/usr /opt/webinoly
   sudo cp -r $SCRIPTPATH/assets/webinoly/templates /opt/webinoly
+
+  ### Below based on weby script --->
 
   sudo mkdir -p /opt/webinoly/templates/source
   sudo find /opt/webinoly -type d -exec chmod 755 {} \;
   sudo find /opt/webinoly -type f -exec chmod 644 {} \;
   sudo chmod -f 744 /opt/webinoly/lib/ex-*
 
-  sudo chmod 755 /opt/webinoly/plugins/*
-  sudo mv /opt/webinoly/plugins/* /usr/bin/
+  sudo chmod 755 /opt/webinoly/usr/*
+  sudo mv /opt/webinoly/usr/* /usr/bin/
 
   ### <---
-
 
   sudo -u root bash -c 'source /opt/webinoly/lib/general && webinoly -conf-value_app-version=$app_version'
 
