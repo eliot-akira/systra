@@ -2,10 +2,10 @@
 
 # Site Manager Plugin (Create, delete and de/activate)
 # Syntax: site <domain> <option> <argument>
-# Options: -html, -php, -mysql, -wp, -parked, -proxy, -empty, -on, -off, -delete, -delete-all, -list, -cache, -ssl, -force-redirect, -yoast-sitemap, -multisite-convert, -clone-from, -replace-content, -redirection, -forward, -info, -env
-# Arguments: -cache, -root, -root-path, -subdomain, -ignore-ssl, -wildcard, -raw, -external-db, -revoke, -ssl-crt, -ssl-key, -ssl-ocsp, -subfolder, -from, -to, -http-code, -regex, -manual, -overwrite, -wp-cache-plugins, -dedicated-reverse-proxy, -must-staple, -cache-valid, -skip-cache, -skip-cookie-cache, -query-string-cache, -query-string-never-cache, -query-string-cache-default, -reset
+# Options: -html, -php, -mysql, -wp, -parked, -proxy, -empty, -on, -off, -delete, -delete-all, -list, -cache, -ssl, -force-redirect, -multisite-convert, -clone-from, -replace-content, -redirection, -forward, -info, -env
+# Arguments: -cache, -root, -root-path, -subdomain, -ignore-ssl, -wildcard, -raw, -external-db, -revoke, -ssl-crt, -ssl-key, -ssl-ocsp, -subfolder, -from, -to, -http-code, -regex, -manual, -overwrite, -wp-cache-plugins, -dedicated-reverse-proxy, -must-staple, -cache-valid, -skip-cache, -skip-cookie-cache, -query-string-cache, -query-string-never-cache, -query-string-cache-default, -reset, -test-cert, -db-role, -domain-mapping-wp-id
 
-# shopt is necessary for this kind !(html|22222) of patterns
+# shopt is necessary for this kind !(html|<toolsport>) of patterns
 shopt -s extglob
 
 source /opt/webinoly/lib/general
@@ -26,7 +26,7 @@ if [[ -n $wp || -n $mysql ]]; then
 
 	# Check for saved DB external data
 	if [[ ( $wp == "true" || $mysql == "true" ) && -n $(conf_read external-dbh) && -n $(conf_read external-dbu) && -n $(conf_read external-dbp) ]]; then
-		dona=$(echo $domain | sed "s/[^0-9A-Za-z]/_/g")
+		[[ -n $domain ]] && dona=$(echo $domain | sed "s/[^0-9A-Za-z]/_/g") || dona="Webinoly_$(pwgen -s -1)"
 		
 		if [[ -n $(conf_read external-dbh) && -n $(conf_read external-dbx) ]]; then
 			exth="$(conf_read external-dbh):$(conf_read external-dbx)"
@@ -35,8 +35,8 @@ if [[ -n $wp || -n $mysql ]]; then
 		fi
 		
 		extp=$( echo $(conf_read external-dbp) | openssl enc -d -a -salt )
-		[[ $wp == "true" ]] && wp=[true,true,$exth,$dona,$dona,random,wp_,$(conf_read external-dbu),$extp]
-		[[ $mysql == "true" ]] && mysql=[$exth,$dona,$dona,random,$(conf_read external-dbu),$extp]
+		[[ $wp == "true" ]] && wp="[true,true,${exth},${dona},${dona},random,wp_,$(conf_read external-dbu),${extp}]"
+		[[ $mysql == "true" ]] && mysql="[${exth},${dona},${dona},random,$(conf_read external-dbu),${extp}]"
 		echo "${blu}${dim}External DB credentials found!${end}"
 	fi
 
@@ -101,10 +101,10 @@ fi
 if [[ -n $subfolder && ! ( $subfolder =~ ^\/([A-Za-z0-9_\/\-]+)?[^\/]$ ) ]]; then
 	echo "${red}[ERROR] Please, enter a valid value for subfolder!${end}"
 	exit 1
-elif [[ -n $subfolder && -z $delete && -z $cache && -z $yoast_sitemap && -z $multisite_convert && -z $clone_from && -z $replace_content && -z $wp && -z $html && -z $php && -z $mysql && -z $proxy && -z $env && -z $info ]]; then
+elif [[ -n $subfolder && -z $delete && -z $cache && -z $multisite_convert && -z $clone_from && -z $replace_content && -z $wp && -z $html && -z $php && -z $mysql && -z $proxy && -z $env && -z $info ]]; then
 	echo "${red}[ERROR] Subfolder option not supported!${end}"
 	exit 1
-elif [[ -n $subfolder && ( $cache == "on" || -n $yoast_sitemap || -n $multisite_convert || -n $replace_content ) && $(is_subfolder $domain $subfolder) != "wp" ]]; then
+elif [[ -n $subfolder && ( $cache == "on" || -n $multisite_convert || -n $replace_content ) && $(is_subfolder $domain $subfolder) != "wp" ]]; then
 	echo "${red}[ERROR] Subfolder not found or is not a WP site!${end}"
 	exit 1
 else
@@ -194,7 +194,6 @@ elif [[ -n $wp && -n $domain ]]; then
 		fi
 		sudo sed -i '/locations.conf/i \	include common/wpcommon.conf;' /etc/nginx/sites-available/$domain
 		[[ $(conf_read wp-admin-auth) == "purged" ]] && sudo httpauth $domain -wp-admin=off > /dev/null 2>&1
-		[[ $(conf_read yoast-sitemap) == "true" ]] && sudo site $domain -yoast-sitemap=on > /dev/null 2>&1
 		[[ -n $env ]] && sudo site $domain -env=$env
 	else
 		if [[ -f /etc/nginx/sites-available/$domain && -n $subfolder && $type == [123] && $(is_subfolder $domain $subfolder) != "false" ]]; then
@@ -289,27 +288,7 @@ elif [[ -n $delete && -f /etc/nginx/sites-available/$domain ]]; then
 		echo "${red}[ERROR] System sites can not be removed!${end}"
 		exit 1
 	elif [[ -n $subfolder ]]; then
-		if [[ $(is_subfolder $domain $subfolder) == "false" ]]; then
-			echo "${red}[ERROR] Subfolder site not found!${end}"
-			exit 1
-		elif [[ -f /var/www/$domain/htdocs$subfolder/wp-config.php && $delete != "keep-db" ]]; then
-			db_delete $domain
-		fi
-		
-		sudo rm -rf /var/www/$domain/htdocs$subfolder
-		sudo rm -rf /etc/nginx/apps.d/$domain$subname-*.conf
-		sudo sed -i "/# WebinolyCustom/,/# WebinolyCustomEnd/{/$domain$subname-php.conf/d}" /etc/nginx/sites-available/$domain
-		sudo sed -i "/# WebinolyCustom/,/# WebinolyCustomEnd/{/$domain$subname-phpx.conf/d}" /etc/nginx/sites-available/$domain
-		sudo sed -i "/# WebinolyCustom/,/# WebinolyCustomEnd/{/$domain$subname-wpfc.conf/d}" /etc/nginx/sites-available/$domain
-		sudo sed -i "/# WebinolyCustom/,/# WebinolyCustomEnd/{/$domain$subname-proxy.conf/d}" /etc/nginx/sites-available/$domain
-		sudo sed -i "/# WebinolyNginxServerStart/,/# WebinolyNginxServerEnd/{\|location $subfolder/ |d}" /etc/nginx/sites-available/$domain
-		echo "${gre}Subfolder${blu} $subfolder ${gre}from${blu} $domain ${gre}has been successfully deleted!${end}"
-		
-		# In case of custom cache
-		if [[ -f /etc/nginx/conf.d/webinoly.conf ]]; then
-			sudo sed -i "/^fastcgi_cache_path \/run\/nginx-cache\/$(echo $domain | sed 's/[^0-9A-Za-z]/_/g')${subname} .*/d" /etc/nginx/conf.d/webinoly.conf
-			[[ ! -s /etc/nginx/conf.d/webinoly.conf ]] && sudo rm /etc/nginx/conf.d/webinoly.conf
-		fi
+		deletesite_subfolder
 	else
 		deletesite
 	fi
@@ -317,9 +296,14 @@ elif [[ -n $delete && -f /etc/nginx/sites-available/$domain ]]; then
 
 # SSL (Letsencrypt)
 elif [[ -n $ssl ]]; then
-	if [[ $ssl =~ ^(renew|force-renewal-all)$ && -z $domain ]]; then
+	if [[ $ssl == "renew" && -z $domain ]]; then
 			# Post-Hook removed because we always restart nginx at the end of site command
-			[[ $ssl == "renew" ]] && sudo certbot renew || sudo certbot renew --force-renewal
+			sudo certbot renew
+	elif [[ $ssl == "force-renewal-all" && -z $domain ]]; then
+			sudo certbot renew --force-renewal
+	elif [[ $ssl == "force-renewal" && -z $manual && -z $wildcard && -f /etc/nginx/sites-available/$domain && -f /etc/letsencrypt/live/$domain/fullchain.pem ]]; then
+			# Normal certs (not-manual) can be renewed easily using this way!
+			sudo certbot renew --cert-name $domain --force-renewal
 	elif [[ ( $ssl == "on" || $ssl == "force-renewal" ) && -f /etc/nginx/sites-available/$domain ]]; then
 		api-events_update si10
 		if [[ $(is_ssl $domain) == "true" && $ssl != "force-renewal" ]]; then
@@ -380,11 +364,6 @@ elif [[ -n $force_redirect && -f /etc/nginx/sites-available/$domain ]]; then
 	force_redirect
 
 
-# Yoast Sitemap support, per site.
-elif [[ -n $yoast_sitemap && -f /etc/nginx/sites-available/$domain ]]; then
-	yoast_sitemap
-
-
 # Staging and Clone sites
 elif [[ -n $clone_from ]]; then
 	if [[ ! -f /etc/nginx/sites-available/$clone_from ]]; then
@@ -403,10 +382,13 @@ elif [[ -n $clone_from ]]; then
 	
 	if [[ $(is_wp $clone_from $subfolder) == "true" ]]; then
 		#We need to call this function in the parent shell to preserve variables and avoid asking two times for the same values in case of external db.
-		wp_conf_retrieve $clone_from $subfolder 
+		wp_conf_retrieve $clone_from true false $subfolder 
 		iswpclone="true"
 		
-		if [[ ( $wp_dbhost == "localhost" && $(check_mysql_connection localhost) != "true" ) || ( $wp_dbhost != "localhost" && $(check_mysql_connection $extdb_url $extdb_port $extdb_user $extdb_pass) != "true" ) ]]; then
+		if [[ -z $wp_dbhost || -z $wp_dbname || -z $wp_dbpref ]]; then
+			echo "${red}[ERROR] Can not retrieve WP data ${dim}(WP Configuration corrupted)!${end}"
+			exit 1
+		elif [[ ( $wp_dbhost == "localhost" && $(check_mysql_connection localhost) != "true" ) || ( $wp_dbhost != "localhost" && $(check_mysql_connection $extdb_url $extdb_port $extdb_user $extdb_pass) != "true" ) ]]; then
 			exit 1
 		elif [[ $(is_wp_multisite $clone_from $subfolder) != "false" ]]; then
 			echo "${red}[ERROR] WordPress Multisite can not be cloned!${end}"
@@ -423,9 +405,6 @@ elif [[ -n $clone_from ]]; then
 elif [[ -n $replace_content && -f /etc/nginx/sites-available/$domain ]]; then
 	if [[ $(is_wp $domain $subfolder) != "true" ]]; then
 		echo "${red}[ERROR] Site${blu} $domain$subfolder ${red}is not a WordPress site!${end}"
-		exit 1
-	elif [[ $(is_parked $domain) == "true" ]]; then
-		echo "${red}[ERROR] Parked sites are not allowed for replace-content!${end}"
 		exit 1
 	else
 		wp_replace_content
@@ -468,5 +447,5 @@ else
 fi
 
 shopt -u extglob
-[[ $(conf_read nginx) == "true" && -z $nginx_not && $(conf_read nginx-reload) != "false" ]] && sudo service nginx reload
+[[ $(conf_read nginx) == "true" && -z $nginx_not && $(conf_read nginx-reload) != "false" ]] && sudo systemctl reload nginx
 api-events_update sie

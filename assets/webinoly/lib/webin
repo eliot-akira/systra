@@ -11,12 +11,18 @@ system_info() {
 	echo "${blu}OS Info:${end}${dim} $(sudo cat /proc/version) ${end}"
 	echo "${blu}Description:${end}${dim} $(sudo lsb_release -d | cut -d':' -f 2- -s) ${end}"
 	echo "${blu}Codename:${end}${dim} $(sudo lsb_release -c | cut -d':' -f 2- -s) ${end}"
-	echo "${blu}Cores:${end}${dim} $cores ${end}"
 	echo "${blu}RAM:${end}${dim} $ramv ${end}"
 	echo "${blu}SWAP:${end}${dim} $swapv ${end}"
-	echo "${blu}File descriptors (OS):${end}${dim} $(sudo cat /proc/sys/fs/file-max) ${end}"
-	[[ $(conf_read nginx) == "true" ]] && echo "${blu}File descriptors (Nginx):${end}${dim} $(grep 'Max open files' /proc/$(cat /run/nginx.pid)/limits | cut -f 15 -d ' ') ${end}"
+	echo ""
+	echo "${blu}CPU Model:${end}${dim} $(lscpu | grep "Model name:" | cut -d ":" -f 2 -s | sed 's/^[ \t]*//') ${end}"
+	echo "${blu}Architecture:${end}${dim} $(lscpu | grep "Vendor ID:" | cut -d ":" -f 2 -s | sed 's/^[ \t]*//') ($(lscpu | grep "Architecture:" | cut -d ":" -f 2 -s | sed 's/^[ \t]*//')) ${end}"
+	echo "${blu}Cores:${end}${dim} $cores ${end}"
+	echo "${blu}Threads per core:${end}${dim} $(lscpu | grep "Thread(s) per core:" | cut -d ":" -f 2 -s | sed 's/^[ \t]*//') ${end}"
+	echo ""
 	echo "${blu}Hostname:${end}${dim} $(sudo hostname) ${end}"
+	echo "${blu}File descriptors (OS):${end}${dim} $(sudo cat /proc/sys/fs/file-max) ${end}"
+	echo "${blu}File descriptors (root):${end}${dim} $(ulimit -Hn) ${end}"
+	[[ $(conf_read nginx) == "true" ]] && echo "${blu}File descriptors (nginx/per process):${end}${dim} $(grep 'Max open files' /proc/$(cat /run/nginx.pid)/limits | cut -f 15 -d ' ') ${end}"
 	echo ""
 	echo "${blu}${bol}[Disk Usage]${end}${dim}"
 	sudo df -Th /
@@ -68,7 +74,11 @@ system_info() {
 	echo "${blu}${bol}[MYSQL]${end}"
 	if [[ $(conf_read mysql) == "true" ]]; then
 		
-		[[ $(conf_read mysql-tool) == "true" ]] && local pmaver=$(grep -e "\$this->set('PMA_VERSION',.*'[0-9\.]*');" /var/www/$(conf_read tools-port)/htdocs/pma/libraries/classes/Config.php | cut -f 4 -d "'") || local pmaver="Not installed!"
+		[[ $(conf_read mysql-tool-pma) == "true" ]] && local pmaver=$(grep -E "public const VERSION = '[0-9\.]+'.*;" /var/www/$(conf_read tools-port)/htdocs/pma/libraries/classes/Version.php | cut -f 2 -d "'") || local pmaver="Not installed!"
+		
+		# Legacy support: before v5.1.0 (Feb 23, 2021) version is found here:
+		[[ $(conf_read mysql-tool-pma) == "true" && -z $pmaver ]] && local pmaver=$(grep -e "\$this->set('PMA_VERSION',.*'[0-9\.]*');" /var/www/$(conf_read tools-port)/htdocs/pma/libraries/classes/Config.php | cut -f 4 -d "'")
+
 		
 		echo "${blu}Info:${end}${dim} $(sudo mysql --version) ${end}"
 		echo "${blu}phpMyAdmin:${end}${dim} $pmaver ${end}"
@@ -88,8 +98,8 @@ system_info() {
 	echo "${blu}Tools port:${end}${dim} $(conf_read tools-port) ${end}"
 	echo "${blu}Timezone:${end}${dim} $tz ${end}"
 	if [[ $(conf_read smtp) == "true" ]]; then
-		echo "${blu}SMTP Host:${end}${dim} $(sudo cat /etc/mailname | head -n 1) ${end}"
-		echo "${blu}SMTP Mainsite:${end}${dim} $(grep -E "^relayhost.?=.?*+" /etc/postfix/main.cf | cut -f 2 -d '=' -s) ${end}"
+		echo "${blu}SMTP Host:${end}${dim} $(grep -E "^relayhost.?=.?*+" /etc/postfix/main.cf | cut -f 2 -d '=' -s) ${end}"
+		echo "${blu}SMTP Mainsite:${end}${dim} $(sudo cat /etc/mailname | head -n 1) ${end}"
 	else
 		echo "${blu}SMTP:${end}${dim} None ${end}"
 	fi
@@ -97,9 +107,7 @@ system_info() {
 	
 	echo "${blu}${bol}[Internal]${end}"
 	if [[ -f /opt/webinoly/webinoly.conf ]]; then
-		echo -n "${blu}${dim}"
-		sudo cat /opt/webinoly/webinoly.conf
-		echo "${end}"
+		sudo sed -nr "s/^([a-z\-]+)\:(.*)$/${blu}\1\:${end}${dim}\2${end}/p" /opt/webinoly/webinoly.conf
 	else
 		echo "${red} [ERROR] Configuration File not found! ${end}"
 	fi
@@ -196,7 +204,7 @@ smtp_setup() {
 	sudo chmod 0600 /etc/postfix/sasl_passwd.db
 	
 	conf_write smtp true
-	sudo service postfix restart
+	sudo systemctl restart postfix
 	echo "${gre}SMTP was successfully enabled!${end}"
 }
 
@@ -217,29 +225,83 @@ mysql_change_password() {
 		exit 1
 	fi
 	
-	if [[ -z $user || -z $pass || $user == *"'"* || $pass == *"'"* || ${#pass} -lt 8  || ! ( $user =~ ^(root|admin)$  ) ]]; then
+	if [[ -z $user || -z $pass || $user == *"'"* || $pass == *"'"* || ${#pass} -lt 8 ]]; then
 		echo "${red}[ERROR] Please, enter a valid username and password!"
-		echo "Only 'root and admin' users allowed and password can not contain a 'single quote' and must be at least 8 characters long.${end}"
+		echo "Password can not contain a 'single quote' and must be at least 8 characters long.${end}"
 		exit 1
+	elif [[ -z $(sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS -e "SELECT User FROM mysql.user;" | grep -ow $user) ]]; then
+			echo "${red}[ERROR] User ${blu}$user ${red}doesn't exists!${end}"
+			exit 1
 	fi
 	
-	
-	sudo mysql --connect-timeout=10 --user=root -p$( echo $(conf_read mysql-root) | openssl enc -d -a -salt ) -e "ALTER USER '${user}'@'localhost' IDENTIFIED BY '${pass}';FLUSH PRIVILEGES;"
-	[[ $? != 0 ]] && catcherror=true
-	
-	if [[ $user == "root" && -z $catcherror ]]; then
-		sudo mysql --connect-timeout=10 --user=root -p$pass -e "ALTER USER '${user}'@'127.0.0.1' IDENTIFIED BY '${pass}';FLUSH PRIVILEGES;"
-		[[ $? != 0 ]] && catcherror=true
-		sudo mysql --connect-timeout=10 --user=root -p$pass -e "ALTER USER '${user}'@'::1' IDENTIFIED BY '${pass}';FLUSH PRIVILEGES;"
-		[[ $? != 0 ]] && catcherror=true
-	fi
-	
-	if [[ -z $catcherror ]]; then
-		conf_write mysql-${user} $( echo $pass | openssl enc -a -salt )
+	sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS -e "ALTER USER '${user}'@'localhost' IDENTIFIED BY '${pass}';FLUSH PRIVILEGES;"
+	if [[ $? == 0 ]]; then
+		[[ $user =~ ^(root|admin)$ ]] && conf_write mysql-${user} $( echo $pass | openssl enc -a -salt )
 		echo "${gre}MySQL Password successfully changed!${end}"
 	else
 		echo "${red}[ERROR] Unexpected error!${end}"
 		exit 1
+	fi
+}
+
+
+mysql_public_access() {
+	if ! [[ $mysql_public_access =~ ^(on|off)$ ]]; then
+		echo "${red}[ERROR] Please, enter a valid value! ${dim}(on/off)${end}"
+		exit 1
+	fi
+	
+	check_for_mysql -ask
+	
+	if [[ $mysql_public_access == "on" ]]; then
+		cnf_write skip-networking 0
+		cnf_write skip-bind-address
+		echo ""
+		echo "${red}[WARNING] Please, be careful and take the proper security actions to protect your server, now that MySQL is open for public access you should at least set your firewall to prevent against any unwanted request.${end}"
+		echo ""
+		[[ -z $create_master_user ]] && echo "${dim}[INFO] Be sure you have a MySQL User with public access!${end}"
+		echo "${gre}MySQL public access successfully enabled!${end}"
+	elif [[ $mysql_public_access == "off" ]]; then
+		cnf_delete skip-networking
+		cnf_delete skip-bind-address
+		echo "${gre}MySQL public access successfully disabled!${end}"
+	fi
+	
+	sudo systemctl restart mysql
+	
+	if [[ -n $create_master_user ]]; then
+		if [[ $create_master_user != true && $(echo "${create_master_user}" | cut -c-1) == "[" && $(echo "${create_master_user}" | rev | cut -c-1) == "]" ]]; then
+			local user=$(echo ${create_master_user:1:-1} | cut -d',' -f 1 -s)
+			local pass=$(echo ${create_master_user:1:-1} | cut -d',' -f 2 -s)
+		fi
+		
+		if [[ -z $user || -z $pass ]]; then
+			read -p "${blu}Master User Name: ${end}" user
+			read -p "${blu}Master User Password: ${end}" pass
+		fi
+		
+		if [[ -z $user || -z $pass || $user == *"'"* || $pass == *"'"* || ${#pass} -lt 8 ]]; then
+			echo "${red}[ERROR] Please, enter a valid username and password!"
+			echo "Password can not contain a 'single quote' and must be at least 8 characters long.${end}"
+			exit 1
+		elif [[ $user != $(dbword_check $user user) ]]; then
+			echo "${red}[ERROR] The DB Name can not be a reserved word or should only contain allowed characters!${blu}"
+			exit 1
+		elif [[ -n $(sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS -e "SELECT User FROM mysql.user;" | grep -ow $user) ]]; then
+			echo "${red}[ERROR] User ${blu}$user ${red}already exists!${end}"
+			exit 1
+		else
+			[[ -n $replication_slave ]] && local priv="replication slave" || local priv="ALL PRIVILEGES"
+			[[ -n $replication_slave ]] && local grant="" || local grant="WITH GRANT OPTION"
+			sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS <<_EOF_
+CREATE USER '${user}'@'%' IDENTIFIED BY '${pass}';
+GRANT ${priv} ON *.* TO '${user}'@'%' ${grant};
+FLUSH PRIVILEGES;
+_EOF_
+
+			[[ $? == 0 ]] && echo "${gre}${dim}Master User${blu} '${user}' ${gre}successfully created!${end}" || echo "${red}[ERROR] Unexpected error!${end}"
+		fi
+	
 	fi
 }
 
@@ -264,6 +326,10 @@ create_blackhole_cert() {
 
 
 webinoly_update() {
+	# Update: sudo webinoly -update
+	# Update from branch: sudo webinoly -update=beta
+	# Downgrade: sudo webinoly -update=1.14.0
+	
 	if [[ $(conf_read branch) =~ ^(alpha|beta)$ ]] && ! [[ $update =~ ^(alpha|beta)$ ]]; then
 		echo "${red}[ERROR] Beta/alpha versions can not be updated to stable versions!${end}"
 		exit 1
@@ -275,12 +341,12 @@ webinoly_update() {
 		local branch="-ver=${update}"
 	else
 		local checkver=$(wget --timeout=10 -t 1 -qO- https://api.webinoly.com/check?text=true)
-		if [[ -n $checkver && -n $currentver && ${currentver//.} -ge ${checkver//.} ]]; then
+		if [[ -z $checkver || -z $currentver ]] || ! [[ $checkver =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+			echo "${red}[ERROR] Version check service unavailable!${dim} (Webinoly API)${end}"
+			exit 1
+		elif [[ ${currentver//.} -ge ${checkver//.} ]]; then
 			echo "${gre}You currently have the latest version!${dim} (v${checkver})${end}"
 			exit 0
-		elif [[ -z $checkver || -z $currentver ]]; then
-			echo "${red}[ERROR] Version number unavailable!${end}"
-			exit 1
 		else
 			echo "${dim}Updating...${end}"
 			echo "${blu}${dim}Your current version 'v${currentver}' will be updated to the newest 'v${checkver}' ${end}"
@@ -289,14 +355,43 @@ webinoly_update() {
 	
 	sudo wget --timeout=15 -t 1 --referer="https://update.webinoly.com/?ver=${app_version}" -qrO weby https://qrok.es/wyupd && sudo bash weby upd $branch
 	
-	[[ $? == 0 ]] && echo "${gre}Webinoly App has been updated successfully!${dim} (Updated to: v$(conf_read app-version))${end}"
+	if [[ $? == 0 ]]; then
+		echo "${gre}Webinoly App has been updated successfully!${dim} (Updated to: v$(conf_read app-version))${end}"
+	else
+		sudo rm weby
+		echo "${red}[ERROR] Update process has failed!${end}"
+		exit 1
+	fi
+		
 	api-events_update wy1s
 }
+
 
 
 wp_package_update() {
   echo "${dim}Downloading WordPress...${end}${blu}"
   sudo wget --timeout=15 -t 1 -qrO /var/www/wp.tar.gz https://wordpress.org/latest.tar.gz
+}
+
+
+fix_permissions() {
+	sudo find /var/www ! -path "/var/www/\.*" -type d -exec chmod 755 {} \;
+	sudo find /var/www ! -path "/var/www/\.*" -type f -exec chmod 644 {} \;
+	
+	if [[ -d /var/www/.ssh ]]; then
+		sudo find /var/www/.ssh -type d -exec chmod 700 {} \;
+		sudo find /var/www/.ssh ! -path "/var/www/.ssh/*.pub" -type f -exec chmod 600 {} \;
+		sudo find /var/www/.ssh -path "/var/www/.ssh/*.pub" -type f -exec chmod 644 {} \;
+	fi
+	if [[ -d $CURRENT_HOME/.ssh ]]; then
+		sudo find $CURRENT_HOME/.ssh -type d -exec chmod 700 {} \;
+		sudo find $CURRENT_HOME/.ssh ! -path "$CURRENT_HOME/.ssh/*.pub" -type f -exec chmod 600 {} \;
+		sudo find $CURRENT_HOME/.ssh -path "$CURRENT_HOME/.ssh/*.pub" -type f -exec chmod 644 {} \;
+		sudo chown -R ${CURRENT_USER}:${CURRENT_USER} $CURRENT_HOME/.ssh
+	fi
+	
+	sudo chown -R www-data:www-data /var/www
+	[[ $(conf_read login-www-data) == "true" ]] && sudo chown root:root /var/www
 }
 
 
@@ -307,20 +402,14 @@ server_reset() {
 		[[ -f /etc/nginx/conf.d/blockips.conf ]] && sudo cp -p /etc/nginx/conf.d/blockips.conf /tmp/webinoly_blockips_backup
 		[[ -f /etc/nginx/conf.d/webinoly.conf ]] && sudo cp -p /etc/nginx/conf.d/webinoly.conf /tmp/webinoly_backup
 		
+		linux_purge
 		sudo sed -i '/WebinolyCustom/,/WebinolyCustomEnd/{/.*/d}' /etc/nginx/fastcgi_params
 		sudo rm -rf /etc/nginx/common
 		sudo rm -rf /etc/nginx/conf.d/*
-		linux_purge
 		nginx_optim
-		
-		# Fix permissions
-		sudo find /var/www -type d -exec chmod 755 {} \;
-		sudo find /var/www -type f -exec chmod 644 {} \;
-		sudo chown -R www-data:www-data /var/www
-		[[ $(conf_read login-www-data) == "true" ]] && sudo chown root:root /var/www
-		
 		echo "${gre}Nginx settings has been updated successfully!${end}"
-		nginx_not="true" # Nginx-Reload not-needed.
+		fix_permissions
+		echo "${gre}Permissions fixed successfully!${end}"
 	elif [[ $(conf_read nginx-optim) != "true" && $server_reset == "nginx" ]]; then
 		echo "${red}[ERROR] Nginx settings couldn't been updated, seems like is not installed in your server!${end}"
 		err_cont=true
@@ -338,16 +427,35 @@ server_reset() {
 			echo "${gre}PHP settings has been updated successfully!${end}"
 		else
 			echo "${red}[ERROR] PHP could not been updated, source files not found!${end}"
-			exit 1
+			err_cont=true
 		fi
 	elif [[ $(conf_read php-optim) != "true" && $server_reset == "php" ]]; then
 		echo "${red}[ERROR] PHP settings couldn't been updated, seems like is not installed in your server!${end}"
-		exit 1
+		err_cont=true
+	fi
+	
+	# Check MySQL Conf
+	if [[ $(conf_read mysql-optim) == "true" && $server_reset =~ ^(mysql|all)$ ]]; then
+		mysql_optim
+		echo "${gre}MySQL settings has been updated successfully!${end}"
+	elif [[ $(conf_read mysql-optim) != "true" && $server_reset == "mysql" ]]; then
+		echo "${red}[ERROR] MySQL settings couldn't been updated, seems like is not installed in your server!${end}"
+		err_cont=true
+	fi
+	
+	# Permissions
+	if [[ $(conf_read nginx) == "true" && $server_reset == "permissions" ]]; then
+		fix_permissions
+		echo "${gre}Permissions fixed successfully!${end}"
+		nginx_not="true" # Nginx-Reload not-needed.
+	elif [[ $(conf_read nginx) != "true" && $server_reset == "permissions" ]]; then
+		echo "${red}[ERROR] Nginx not found, seems like is not installed in your server!${end}"
+		err_cont=true
 	fi
 	
 	# Display message just to show we are alive.
 	if [[ $server_reset == "all" && $(conf_read php-optim) != "true" && $(conf_read nginx-optim) != "true" ]]; then
-		echo "${blu}Nothing to do, NGINX and PHP are not installed yet!${end}"
+		echo "${blu}Nothing to do here! ${dim}(NGINX, PHP or MySQL are not installed yet)${end}"
 	fi
 }
 
@@ -400,7 +508,7 @@ show_db_data() {
 change_tools_port() {
 	local oldport=$(conf_read tools-port)
 	if [[ $tools_port == true ]]; then
-		[[ -z $oldport ]] && local oldport="22222"	
+		[[ -z $oldport ]] && local oldport=$tools_port_default
 		read -p "${blu}Tools Port [Current: $oldport]: " port
 	else
 		port=$tools_port
@@ -414,7 +522,7 @@ change_tools_port() {
 			exit 1
 		fi
 		
-		if [[ $(conf_read nginx-tool) == "true" && $(conf_read nginx) == "true" ]]; then
+		if [[ $(conf_read nginx) == "true" && -d /var/www/$oldport ]]; then
 			# MV in some edge cases fails to rename, specially when so much files are within the directories.
 			sudo mkdir -p /var/www/$port
 			sudo cp -rp /var/www/$oldport/* /var/www/$port
@@ -445,8 +553,6 @@ set_tools_site() {
 	if [[ -z $tools_site ]]; then
 		echo "${red}[ERROR] Please, enter a valid value!${end}"
 		exit 1
-	elif [[ ( $tools_site == "default" && -z $(conf_read tools-site) ) || ( -n $(conf_read tools-site) && $tools_site == $(conf_read tools-site) ) ]]; then
-		echo "${gre}Tools-Site is already set to${blu} $tools_site${end}"
 	elif [[ -f /etc/nginx/sites-available/$tools_site && -f /etc/nginx/sites-available/$(conf_read tools-port) && $tools_site != "default" ]]; then
 		# Check for previous assigned domain and remove
 		if [[ -n $(conf_read tools-site) ]]; then
@@ -492,7 +598,7 @@ set_tools_site() {
 		
 		# Default blackhole for requests different from our assigned Tools-Site
 		sudo sed -i '/Webinoly Admin-Tools NGINX CONFIGURATION/r /opt/webinoly/templates/general/tools-site-blackhole' /etc/nginx/sites-available/$(conf_read tools-port)
-		sudo sed -i "/WebinolyToolsStartBlackhole/,/WebinolyToolsEndBlackhole/{s/22222/$(conf_read tools-port)/}" /etc/nginx/sites-available/$(conf_read tools-port)
+		sudo sed -i "/WebinolyToolsStartBlackhole/,/WebinolyToolsEndBlackhole/{s/<port>/$(conf_read tools-port)/}" /etc/nginx/sites-available/$(conf_read tools-port)
 		if [[ $(is_ssl $tools_site) == "false" ]]; then
 			sudo sed -i "/WebinolyToolsStartBlackhole/,/WebinolyToolsEndBlackhole/{/ssl_certificate/d}" /etc/nginx/sites-available/$(conf_read tools-port)
 			sudo sed -i "/WebinolyToolsStartBlackhole/,/WebinolyToolsEndBlackhole/{/error_page/d}" /etc/nginx/sites-available/$(conf_read tools-port)
@@ -504,9 +610,9 @@ set_tools_site() {
 		echo "${gre}Domain${blu} ${tools_site}:$(conf_read tools-port) ${gre}was successfully assigned to access your server tools!${end}"
 	elif [[ $tools_site == "default" ]]; then
 		sudo rm -rf /etc/nginx/sites-available/$(conf_read tools-port)
-		sudo cp /opt/webinoly/templates/nginx/22222 /etc/nginx/sites-available/$(conf_read tools-port)
-		sudo sed -i "s/22222/$(conf_read tools-port)/g"  /etc/nginx/sites-available/$(conf_read tools-port)
-		conf_delete tools-site
+		sudo cp /opt/webinoly/templates/nginx/admin_tools.conf /etc/nginx/sites-available/$(conf_read tools-port)
+		sudo sed -i "s/<port>/$(conf_read tools-port)/g"  /etc/nginx/sites-available/$(conf_read tools-port)
+		conf_write tools-site default
 		echo "${gre}Tools Site settings has been reset successfully!${end}"
 	elif [[ -f /etc/nginx/sites-available/$tools_site && ! -f /etc/nginx/sites-available/$(conf_read tools-port) ]]; then
 		echo "${red}[ERROR] Tools Site is not enabled! ${end}"
@@ -530,10 +636,11 @@ www_data_sftp_access() {
 		echo "${gre}SFTP access for www-data user is already disabled! ${end}"
 	elif [[ $login_www_data == "on" ]]; then
 		# Allow access for www-data user
-		if [[ -f $HOME/.ssh/authorized_keys ]]; then
+		if [[ -f $CURRENT_HOME/.ssh/authorized_keys ]]; then
+			echo "${blu}${dim}Copying your SSH keys from '${CURRENT_USER}' to www-data access!${end}"
 			sudo mkdir -p /var/www/.ssh
 			sudo chmod 700 /var/www/.ssh
-			sudo cat $HOME/.ssh/authorized_keys > /var/www/.ssh/authorized_keys
+			sudo cat $CURRENT_HOME/.ssh/authorized_keys > /var/www/.ssh/authorized_keys
 			sudo chmod 600 /var/www/.ssh/*
 		fi
 		sudo chown -R www-data:www-data /var/www
@@ -556,7 +663,7 @@ Match Group sftponly
 		[[ -n $falus ]] && sudo sed -i "s/$falus/$falus www-data/" /etc/ssh/sshd_config
 
 		conf_write login-www-data true
-		sudo service ssh restart
+		sudo systemctl restart ssh
 		echo "${gre}SFTP access for www-data user has been successfuly enabled! ${end}"
 	
 	elif [[ $login_www_data == "off" ]]; then
@@ -576,7 +683,7 @@ Match Group sftponly
 		fi
 
 		conf_write login-www-data purged
-		sudo service ssh restart
+		sudo systemctl restart ssh
 		echo "${gre}SFTP access for www-data user has been successfuly disabled! ${end}"
 	else
 		echo "${red}[ERROR] Invalid value for login-www-data! ${end}"
@@ -597,6 +704,7 @@ webinoly_uninstall() {
 	
 	if [[ $answer == [Yy] ]]; then
 		[[ -z $no_recovery ]] && sudo tar -Pcf $HOME/.webinoly-conf-restore_dont-remove /opt/webinoly/webinoly.conf /opt/webinoly/templates/source
+		[[ -z $no_recovery ]] && echo "${gre}${dim}Configuration saved!${end}"
 		sudo rm -rf /opt/webinoly
 		sudo rm /usr/bin/webinoly
 		sudo rm /usr/bin/stack
@@ -647,7 +755,7 @@ external_sources_update() {
 
 clear_caches() {
 	if [[ $clear_cache =~ ^(redis|all)$ ]]; then
-		if [[ $(conf_read php-tool) == "true" && -f /etc/redis/redis.conf ]]; then
+		if [[ $(conf_read php-tool-redis) == "true" && -f /etc/redis/redis.conf ]]; then
 			sudo redis-cli flushall
 			echo "${gre}- Redis Cache has been successfully cleared!${end}"
 		else
@@ -656,7 +764,7 @@ clear_caches() {
 		fi
 	fi
 	if [[ $clear_cache =~ ^(memcache|memcached|all)$ ]]; then
-		if [[ $(conf_read php-tool) == "true" && -f /etc/memcached.conf ]]; then
+		if [[ $(conf_read php-tool-memcached) == "true" && -f /etc/memcached.conf ]]; then
 			memhost=$(grep ^-l /etc/memcached.conf | cut -f 2 -d ' ')
 			memport=$(grep ^-p /etc/memcached.conf | cut -f 2 -d ' ')
 			echo flush_all > /dev/tcp/$memhost/$memport
@@ -667,7 +775,7 @@ clear_caches() {
 		fi
 	fi
 	if [[ $clear_cache =~ ^(opcache|all)$ ]]; then
-		if [[ $(conf_read nginx-tool) == "true" && $(conf_read php-tool) == "true" ]]; then
+		if [[ $(conf_read nginx) == "true" && $(conf_read php) == "true" ]]; then
 			port=$(conf_read tools-port)
 			if [[ ! -f /var/www/$port/htdocs/php/opcache/index.php ]]; then
 				sudo mkdir /var/www/$port/htdocs/php/opcache
@@ -720,6 +828,18 @@ nginx_blockip() {
 			[[ $list == "raw" || -n $raw ]] && echo "" || echo "${end}"
 		else
 			[[ $blockip == true ]] && read -p "${blu}IP address to block: ${end}" blockip
+			
+			# Check for list of IP's
+			if [[ -n $(echo $blockip | cut -d',' -f 2 -s) ]]; then
+				local c=1
+				while [[ -n $(echo $blockip | cut -d',' -f $c -s) ]]
+				do  
+					[[ $(is_ip $(echo $blockip | cut -d',' -f $c -s)) == "true" ]] && sudo webinoly -blockip=$(echo $blockip | cut -d',' -f $c -s)
+					local c=$(($c+1))
+				done
+				exit 0
+			fi
+			
 			if [[ $(is_ip $blockip) == "true" ]]; then
 				if [[ ! -f /etc/nginx/conf.d/blockips.conf ]]; then
 					sudo touch /etc/nginx/conf.d/blockips.conf
@@ -740,6 +860,18 @@ nginx_blockip() {
 		fi
 	elif [[ -n $purge ]]; then
 		[[ $blockip == true ]] && read -p "${blu}IP address to unblock: ${end}" blockip
+		
+		# Check for list of IP's
+		if [[ -n $(echo $blockip | cut -d',' -f 2 -s) ]]; then
+			local c=1
+			while [[ -n $(echo $blockip | cut -d',' -f $c -s) ]]
+			do  
+				[[ $(is_ip $(echo $blockip | cut -d',' -f $c -s)) == "true" ]] && sudo webinoly -blockip=$(echo $blockip | cut -d',' -f $c -s) -purge
+				local c=$(($c+1))
+			done
+			exit 0
+		fi
+		
 		if [[ $(is_ip $blockip) == "true" ]]; then
 			# https://stackoverflow.com/questions/1797906/delete-using-a-different-delimiter-with-sed
 			[[ -f /etc/nginx/conf.d/blockips.conf ]] && sed -i "\#^deny ${blockip};#d" /etc/nginx/conf.d/blockips.conf
@@ -853,455 +985,6 @@ aws_secret_access_key = $pass" >> $HOME/.aws/credentials
 }
 
 
-dd_nginx_purge() {
-	if [[ -f /etc/datadog-agent/conf.d/nginx.d/conf.yaml ]]; then
-		if [[ ! -f /etc/datadog-agent/conf.d/php_fpm.d/conf.yaml ]]; then
-			sudo sed -i '/WebinolyLocalhostStart/,/WebinolyLocalhostEnd/{/.*/d}' /etc/nginx/sites-available/$(conf_read tools-port)
-		fi
-		
-		sudo rm -rf /etc/datadog-agent/conf.d/nginx.d/conf.yaml
-		echo "${gre}Datadog Nginx integration has been successfully removed!${end}"
-	else
-		echo "${gre}Datadog Nginx integration is not installed, so not removed!${end}"
-	fi
-}
-
-
-dd_fpm_purge() {
-	if [[ -f /etc/datadog-agent/conf.d/php_fpm.d/conf.yaml ]]; then
-		if [[ ! -f /etc/datadog-agent/conf.d/nginx.d/conf.yaml ]]; then
-			sudo sed -i '/WebinolyLocalhostStart/,/WebinolyLocalhostEnd/{/.*/d}' /etc/nginx/sites-available/$(conf_read tools-port)
-		fi
-
-		sudo rm -rf /etc/datadog-agent/conf.d/php_fpm.d/conf.yaml
-		echo "${gre}Datadog PHP-FPM integration has been successfully removed!${end}"
-	else
-		echo "${gre}Datadog PHP-FPM integration is not installed, so not removed!${end}"
-	fi
-}
-
-
-dd_mysql_purge() {
-	if [[ -f /etc/datadog-agent/conf.d/mysql.d/conf.yaml ]]; then
-		sudo rm -rf /etc/datadog-agent/conf.d/mysql.d/conf.yaml
-		echo "${gre}Datadog MySQL integration has been successfully removed!${end}"
-	else
-		echo "${gre}Datadog MySQL integration is not installed, so not removed!${end}"
-	fi
-}
-
-
-dd_redis_purge() {
-	if [[ -f /etc/datadog-agent/conf.d/redisdb.d/conf.yaml ]]; then
-		sudo rm -rf /etc/datadog-agent/conf.d/redisdb.d/conf.yaml
-		echo "${gre}Datadog Redis integration has been successfully removed!${end}"
-	else
-		echo "${gre}Datadog Redis integration is not installed, so not removed!${end}"
-	fi
-}
-
-
-dd_logs_enable() {
-	if [[ $(is_dd_log global) != "true" ]]; then
-		echo "# WebinolyLogsStart
-logs_enabled: true
-logs_config:
-  use_http: true
-  use_compression: true
-# WebinolyLogsEnd" >> /etc/datadog-agent/datadog.yaml
-	fi
-}
-
-
-dd_logs_disable() {
-	if [[ $(is_dd_log nginx) != "true" && $(is_dd_log fpm) != "true" && $(is_dd_log mysql) != "true" && $(is_dd_log redis) != "true" ]]; then
-		sudo sed -i '/WebinolyLogsStart/,/WebinolyLogsEnd/{/.*/d}' /etc/datadog-agent/datadog.yaml
-	fi
-}
-
-
-logrotate_perm() {
-	if [[ $1 == "nginx" ]]; then
-		local path="/etc/logrotate.d/nginx"
-		local owner="www-data adm"
-	elif [[ $1 == "fpm" ]]; then
-		local path="/etc/logrotate.d/php$(conf_read php-ver)-fpm"
-		local owner="root root"
-	elif [[ $1 == "mysql" ]]; then
-		local path="/etc/logrotate.d/mysql-server"
-		local owner="mysql adm"
-	elif [[ $1 == "redis" ]]; then
-		local path="/etc/logrotate.d/redis-server"
-		local owner="redis adm"
-	else
-		local path=""
-		local owner=""
-	fi
-	
-	if [[ -n $path && -n $owner ]]; then
-		sudo sed -i "/create [0-9]/d" $path
-		sudo sed -i "/missingok/i \	create 0644 $owner" $path
-	fi
-}
-
-
-dd_nginx_logs_extended() {
-	for site in "/etc/nginx/sites-available"/*
-	do
-		domi=$(echo $site | cut -f 5 -d "/")
-		if [[ -n $domi && $domi != "default" ]]; then
-			if [[ -L /etc/nginx/sites-enabled/$domi && -z $( grep -F "access_log off;" /etc/nginx/sites-available/$domi) ]]; then
-				[[ -f /var/log/nginx/$domi.access.log ]] && sudo chmod 644 /var/log/nginx/$domi.access.log
-				[[ -f /var/log/nginx/$domi.error.log ]] && sudo chmod 644 /var/log/nginx/$domi.error.log
-				echo "#WebinolyDatadogLogsStart
- - type: file
-   path: /var/log/nginx/$domi.access.log
-   service: nginx
-   source: $domi
-
- - type: file
-   path: /var/log/nginx/$domi.error.log
-   service: nginx
-   source: $domi
-#WebinolyDatadogLogsEnd" >> /etc/datadog-agent/conf.d/nginx.d/conf.yaml
-				echo "${gre}Datadog Nginx Logs for ${blu}${domi}${gre} has been successfully enabled!${end}"
-			elif [[ -L /etc/nginx/sites-enabled/$domi ]]; then
-				[[ -f /var/log/nginx/$domi.error.log ]] && sudo chmod 644 /var/log/nginx/$domi.error.log
-				echo "#WebinolyDatadogLogsStart
- - type: file
-   path: /var/log/nginx/$domi.error.log
-   service: nginx
-   source: $domi
-#WebinolyDatadogLogsEnd" >> /etc/datadog-agent/conf.d/nginx.d/conf.yaml
-				echo "${gre}Datadog Nginx (Only-Error) Logs for ${blu}${domi}${gre} has been successfully enabled!${end}"
-			else
-				echo "${gre}Datadog Nginx Logs for ${blu}${domi}${gre} can NOT be added because your site is disabled!${end}"
-			fi
-		fi
-	done
-}
-
-
-dd_nginx_logs() {
-	if [[ $(is_dd_log nginx) == "true" ]]; then
-		echo "${gre}Datadog Nginx Log is already enabled!${end}"
-	elif [[ -f /etc/datadog-agent/conf.d/nginx.d/conf.yaml ]]; then
-		logrotate_perm nginx
-		[[ -f /var/log/nginx/error.log ]] && sudo chmod 644 /var/log/nginx/error.log
-		[[ -d /var/log/nginx ]] && sudo chmod 755 /var/log/nginx
-	
-		if [[ -z $( grep -F "access_log off;" /etc/nginx/nginx.conf ) ]]; then
-			[[ -f /var/log/nginx/access.log ]] && sudo chmod 644 /var/log/nginx/access.log
-			echo "#WebinolyDatadogLogsStart
-logs:
- - type: file
-   path: /var/log/nginx/access.log
-   service: nginx
-   source: nginx
-
- - type: file
-   path: /var/log/nginx/error.log
-   service: nginx
-   source: nginx
-#WebinolyDatadogLogsEnd" >> /etc/datadog-agent/conf.d/nginx.d/conf.yaml
-		else
-			echo "#WebinolyDatadogLogsStart
-logs:
- - type: file
-   path: /var/log/nginx/error.log
-   service: nginx
-   source: nginx
-#WebinolyDatadogLogsEnd" >> /etc/datadog-agent/conf.d/nginx.d/conf.yaml
-		fi
-	
-	dd_nginx_logs_extended
-	dd_logs_enable
-	echo "${gre}Datadog Nginx Logs (global) has been successfully enabled!${end}"
-	
-	else
-		echo "${red}[ERROR] Datadog Nginx integration is not enabled!${end}"
-		exit 1
-	fi
-}
-
-
-dd_fpm_logs() {
-	if [[ $(is_dd_log fpm) == "true" ]]; then
-		echo "${gre}Datadog PHP-FPM Log is already enabled!${end}"
-	elif [[ -f /etc/datadog-agent/conf.d/php_fpm.d/conf.yaml ]]; then
-		
-		# REMOVE: Check for stacks built before v1.11.0
-		if [[ -f /var/log/php/$(conf_read php-ver)/fpm.log ]]; then
-			sudo sed -i "/error_log =/c\error_log = \/var\/log\/php$(conf_read php-ver)-fpm.log" /etc/php/$(conf_read php-ver)/fpm/php-fpm.conf
-			sudo systemctl restart php$(conf_read php-ver)-fpm
-		fi
-		
-		logrotate_perm fpm
-		[[ -f /var/log/php$(conf_read php-ver)-fpm.log ]] && sudo chmod 644 /var/log/php$(conf_read php-ver)-fpm.log
-		
-		echo "#WebinolyDatadogLogsStart
-logs:
- - type: file
-   path: /var/log/php$(conf_read php-ver)-fpm.log
-   service: php
-   source: php
-#WebinolyDatadogLogsEnd" >> /etc/datadog-agent/conf.d/php_fpm.d/conf.yaml
-	
-	dd_logs_enable
-	echo "${gre}Datadog PHP-FPM Logs has been successfully enabled!${end}"
-	
-	else
-		echo "${red}[ERROR] Datadog PHP-FPM integration is not enabled!${end}"
-		exit 1
-	fi
-}
-
-
-dd_mysql_logs() {
-	if [[ $(is_dd_log mysql) == "true" ]]; then
-		echo "${gre}Datadog MySQL Log is already enabled!${end}"
-	elif [[ -f /etc/datadog-agent/conf.d/mysql.d/conf.yaml ]]; then
-
-		mysql_default_cnf # REMOVE: In case the stack was built with an old configuration
-		
-		logrotate_perm mysql
-		[[ -f /var/log/mysql/error.log ]] && sudo chmod 644 /var/log/mysql/error.log
-		[[ -d /var/log/mysql ]] && sudo chmod 755 /var/log/mysql
-		
-		echo "#WebinolyDatadogLogsStart
-logs:
- - type: file
-   path: /var/log/mysql/error.log
-   source: mysql
-   service: mysql
-#WebinolyDatadogLogsEnd" >> /etc/datadog-agent/conf.d/mysql.d/conf.yaml
-	
-	dd_logs_enable
-	echo "${gre}Datadog MySQL Logs has been successfully enabled!${end}"
-	
-	else
-		echo "${red}[ERROR] Datadog MySQL integration is not enabled!${end}"
-		exit 1
-	fi
-}
-
-
-dd_redis_logs() {
-	if [[ $(is_dd_log redis) == "true" ]]; then
-		echo "${gre}Datadog Redis Log is already enabled!${end}"
-	elif [[ -f /etc/datadog-agent/conf.d/redisdb.d/conf.yaml ]]; then
-		logrotate_perm redis
-		[[ -f /var/log/redis/redis-server.log ]] && sudo chmod 644 /var/log/redis/redis-server.log
-		[[ -d /var/log/redis ]] && sudo chmod 755 /var/log/redis
-	
-		echo "#WebinolyDatadogLogsStart
-logs:
- - type: file
-   path: /var/log/redis/redis-server.log
-   source: redis
-   service: redis
-#WebinolyDatadogLogsEnd" >> /etc/datadog-agent/conf.d/redisdb.d/conf.yaml
-	
-	dd_logs_enable
-	echo "${gre}Datadog Redis Logs has been successfully enabled!${end}"
-	
-	else
-		echo "${red}[ERROR] Datadog Redis integration is not enabled!${end}"
-		exit 1
-	fi
-}
-
-
-dd_nginx() {
-	if [[ ! -f /etc/datadog-agent/conf.d/nginx.d/conf.yaml ]]; then
-		if [[ -z $(grep -F "WebinolyLocalhostStart" /etc/nginx/sites-available/$(conf_read tools-port)) ]]; then
-			sudo sed -i '/Webinoly Admin-Tools NGINX CONFIGURATION/r /opt/webinoly/templates/general/tools-site-localhost' /etc/nginx/sites-available/$(conf_read tools-port)
-		fi
-		
-		sudo touch /etc/datadog-agent/conf.d/nginx.d/conf.yaml
-		sudo chmod 644 /etc/datadog-agent/conf.d/nginx.d/conf.yaml
-		sudo chown dd-agent:dd-agent /etc/datadog-agent/conf.d/nginx.d/conf.yaml
-		
-		echo "init_config:
-
-instances:
-- nginx_status_url: http://localhost/nginx_status
-" >> /etc/datadog-agent/conf.d/nginx.d/conf.yaml
-
-		[[ $logs != "off" ]] && dd_nginx_logs
-		echo "${gre}Datadog Nginx integration has been successfully configured!${end}"
-		
-	elif [[ $logs == "on" ]]; then
-		dd_nginx_logs
-	elif [[ $logs == "off" ]]; then
-		if [[ $(is_dd_log nginx) == "true" ]]; then
-			sudo sed -i '/WebinolyDatadogLogsStart/,/WebinolyDatadogLogsEnd/{/.*/d}' /etc/datadog-agent/conf.d/nginx.d/conf.yaml
-			dd_logs_disable
-			echo "${gre}Datadog Nginx Logs has been successfully disabled!${end}"
-		else
-			echo "${gre}Datadog Nginx Log is already disabled!${end}"
-		fi
-	else
-		echo "${gre}Datadog Nginx integration is already enabled!${end}"
-	fi
-}
-
-
-dd_fpm() {
-	if [[ ! -f /etc/datadog-agent/conf.d/php_fpm.d/conf.yaml ]]; then
-		if [[ -z $(grep -F "WebinolyLocalhostStart" /etc/nginx/sites-available/$(conf_read tools-port)) ]]; then
-			sudo sed -i '/Webinoly Admin-Tools NGINX CONFIGURATION/r /opt/webinoly/templates/general/tools-site-localhost' /etc/nginx/sites-available/$(conf_read tools-port)
-		fi
-		
-		sudo touch /etc/datadog-agent/conf.d/php_fpm.d/conf.yaml
-		sudo chmod 644 /etc/datadog-agent/conf.d/php_fpm.d/conf.yaml
-		sudo chown dd-agent:dd-agent /etc/datadog-agent/conf.d/php_fpm.d/conf.yaml
-		
-		echo "init_config:
-
-instances:
-- status_url: http://localhost/status
-  ping_url: http://localhost/ping
-  use_fastcgi: false
-  ping_reply: pong
-" >> /etc/datadog-agent/conf.d/php_fpm.d/conf.yaml
-
-		[[ $logs != "off" ]] && dd_fpm_logs
-		echo "${gre}Datadog PHP-FPM integration has been successfully configured!${end}"
-		
-	elif [[ $logs == "on" ]]; then
-		dd_fpm_logs
-	elif [[ $logs == "off" ]]; then
-		if [[ $(is_dd_log fpm) == "true" ]]; then
-			sudo sed -i '/WebinolyDatadogLogsStart/,/WebinolyDatadogLogsEnd/{/.*/d}' /etc/datadog-agent/conf.d/php_fpm.d/conf.yaml
-			dd_logs_disable
-			echo "${gre}Datadog PHP-FPM Logs has been successfully disabled!${end}"
-		else
-			echo "${gre}Datadog PHP-FPM Log is already disabled!${end}"
-		fi
-	else
-		echo "${gre}Datadog PHP-FPM integration is already enabled!${end}"
-	fi
-}
-
-
-dd_mysql() {
-	if [[ ! -f /etc/datadog-agent/conf.d/mysql.d/conf.yaml ]]; then
-		sudo touch /etc/datadog-agent/conf.d/mysql.d/conf.yaml
-		sudo chmod 644 /etc/datadog-agent/conf.d/mysql.d/conf.yaml
-		sudo chown dd-agent:dd-agent /etc/datadog-agent/conf.d/mysql.d/conf.yaml
-		
-		echo "init_config:
-
-instances:
-- server: 127.0.0.1
-  user: admin
-  pass: '$ADMIN_PASS'
-  port: \"3306\"
-  options:
-    replication: false
-    galera_cluster: false
-    extra_status_metrics: true
-    extra_innodb_metrics: true
-    extra_performance_metrics: true
-    schema_size_metrics: false
-    disable_innodb_metrics: false
-" >> /etc/datadog-agent/conf.d/mysql.d/conf.yaml
-
-		[[ $logs != "off" ]] && dd_mysql_logs
-		echo "${gre}Datadog MySQL integration has been successfully configured!${end}"
-		
-	elif [[ $logs == "on" ]]; then
-		dd_mysql_logs
-	elif [[ $logs == "off" ]]; then
-		if [[ $(is_dd_log mysql) == "true" ]]; then
-			sudo sed -i '/WebinolyDatadogLogsStart/,/WebinolyDatadogLogsEnd/{/.*/d}' /etc/datadog-agent/conf.d/mysql.d/conf.yaml
-			dd_logs_disable
-			echo "${gre}Datadog MySQL Logs has been successfully disabled!${end}"
-		else
-			echo "${gre}Datadog MySQL Log is already disabled!${end}"
-		fi
-	else
-		echo "${gre}Datadog MySQL integration is already enabled!${end}"
-	fi
-}
-
-
-dd_redis() {
-	if [[ ! -f /etc/datadog-agent/conf.d/redisdb.d/conf.yaml ]]; then
-		sudo touch /etc/datadog-agent/conf.d/redisdb.d/conf.yaml
-		sudo chmod 644 /etc/datadog-agent/conf.d/redisdb.d/conf.yaml
-		sudo chown dd-agent:dd-agent /etc/datadog-agent/conf.d/redisdb.d/conf.yaml
-		
-		echo "init_config:
-
-instances:
-- host: localhost
-  port: 6379
-" >> /etc/datadog-agent/conf.d/redisdb.d/conf.yaml
-
-		[[ $logs != "off" ]] && dd_redis_logs
-		echo "${gre}Datadog Redis integration has been successfully configured!${end}"
-		
-	elif [[ $logs == "on" ]]; then
-		dd_redis_logs
-	elif [[ $logs == "off" ]]; then
-		if [[ $(is_dd_log redis) == "true" ]]; then
-			sudo sed -i '/WebinolyDatadogLogsStart/,/WebinolyDatadogLogsEnd/{/.*/d}' /etc/datadog-agent/conf.d/redisdb.d/conf.yaml
-			dd_logs_disable
-			echo "${gre}Datadog Redis Logs has been successfully disabled!${end}"
-		else
-			echo "${gre}Datadog Redis Log is already disabled!${end}"
-		fi
-	else
-		echo "${gre}Datadog Redis integration is already enabled!${end}"
-	fi
-}
-
-
-dd_purge() {
-	if [[ -d /etc/datadog-agent ]]; then
-		sudo apt-get remove --purge datadog-agent -y
-		sudo sed -i '/WebinolyLocalhostStart/,/WebinolyLocalhostEnd/{/.*/d}' /etc/nginx/sites-available/$(conf_read tools-port)
-		echo "${gre}Datadog Agent has been removed successfully from your server!${end}"
-	else
-		echo "${red}[ERROR] Datadog Agent is not installed on your server!${end}"
-		exit 1
-	fi
-}
-
-dd_install() {
-	if ! [[ $(command -v curl) ]]; then
-		echo "${red}[ERROR] Curl package is required for Datadog!${end}"
-		exit 1
-	elif [[ -d /etc/datadog-agent ]]; then
-		echo "${gre}Datadog Agent is already installed in your server!${end}"
-	else
-		[[ $datadog == true ]] && read -p "${blu}Datatdog API key: ${end}" datadog
-		
-		if [[ $datadog == true ]]; then
-			echo "${red}[ERROR] Invalid Datadog API key!${end}"
-			exit 1
-		elif ! [[ $datadog  =~ ^[0-9a-zA-Z]+$ ]]; then
-			echo "${red}[ERROR] Invalid Datadog API key!${end}"
-			exit 1
-		else
-			DD_INSTALL_ONLY=true DD_AGENT_MAJOR_VERSION=$datadog_agent_ver DD_API_KEY=$datadog bash -c "$(curl -L https://raw.githubusercontent.com/DataDog/datadog-agent/master/cmd/agent/install_script.sh)"
-			
-			if [[ $integrations != "off" ]]; then
-				[[ $(conf_read nginx) == "true" ]] && dd_nginx
-				[[ $(conf_read php) == "true" ]] && dd_fpm
-				[[ $(conf_read mysql) == "true" ]] && dd_mysql
-				[[ $(conf_read php-tool) == "true" ]] && dd_redis
-			fi
-			
-			sudo service datadog-agent start
-			echo "${gre}Datadog Agent has been successfully installed in your server!${end}"
-		fi
-	fi
-}
-
-
 database_import() {
 	[[ -z $file ]] && read -p "${blu}SQL file path to import: ${end}" file
 	if [[ -z $file || ! -f $file ]]; then
@@ -1313,6 +996,11 @@ database_import() {
 	
 	if [[ -n $external_db ]]; then
 		external_db_parse
+		if [[ $(check_mysql_connection $extdb_url $extdb_port $extdb_user $extdb_pass) != "true" ]]; then
+			echo "${red}[ERROR] Cannot connect with your External Database!${end}"
+			exit 1
+		fi
+		
 		echo "${dim}Wait while we import your db... ${end}"
 		sudo mysql --connect-timeout=10 -h "$extdb_url" -P "$extdb_port" -u"$extdb_user" -p"$extdb_pass" < $file
 		sudo mysql --connect-timeout=10 -h "$extdb_url" -P "$extdb_port" -u"$extdb_user" -p"$extdb_pass" -e "FLUSH PRIVILEGES;"
@@ -1329,105 +1017,12 @@ database_import() {
 }
 
 
-http_header_referrer() {
-	[[ -z $header_referrer || $header_referrer == "true" ]] && read -p "${blu}Referrer header value: ${end}" header_referrer
-	if ! [[ $header_referrer =~ ^(no-referrer|no-referrer-when-downgrade|origin|origin-when-cross-origin|same-origin|strict-origin|strict-origin-when-cross-origin|unsafe-url)$ ]]; then
-		echo "${red}[ERROR] Invalid referrer header value!${end}"
-		exit 1
-	fi
-	
-	conf_write header-referrer $header_referrer
-	[[ $(conf_read nginx) == "true" ]] && sudo sed -i "/^add_header Referrer-Policy /c\add_header Referrer-Policy \"$header_referrer\";" /etc/nginx/common/headers-html.conf
-	echo "${gre}HTTP Header successfully configured!${end}"
-}
-
-
-http_header_hsts() {
-	[[ -z $header_hsts || $header_hsts == "true" ]] && read -p "${blu}HSTS header value: ${end}" header_hsts
-	if ! [[ $header_hsts =~ ^([0-9]+|off|preload|default)$ ]]; then
-		echo "${red}[ERROR] Invalid HSTS header value!${end}"
-		exit 1
-	elif [[ $header_hsts =~ ^[0-9]+$ && $header_hsts -gt 31536000 ]]; then
-		echo "${red}[ERROR] HSTS max-age greater than 1 year not allowed without preload (2 years).${end}"
-		exit 1
-	fi
-	
-	if [[ $(conf_read nginx) == "true" ]]; then
-		if [[ $header_hsts == "off" ]]; then
-			sudo sed -i '/^add_header Strict-Transport-Security /s/^/#/' /etc/nginx/common/headers-https.conf
-		else
-			local set_hsts="$header_hsts; includeSubDomains"
-			[[ $header_hsts == "default" ]] && set_hsts="31536000"
-			[[ $header_hsts == "preload" ]] && set_hsts="63072000; includeSubDomains; preload"
-			sudo sed -Ei "/^#?add_header Strict-Transport-Security /c\add_header Strict-Transport-Security \"max-age=${set_hsts}\";" /etc/nginx/common/headers-https.conf
-		fi
-	fi
-	
-	[[ $header_hsts == "default" ]] && conf_delete header-hsts || conf_write header-hsts $header_hsts
-	[[ $header_hsts == "off" ]] && echo "${gre}HSTS Header successfully disabled!${end}" || echo "${gre}HTTP Header successfully configured!${end}"
-}
-
-
-http_header_csp() {
-	[[ $header_csp != "off" && $header_csp != "reload" ]] && read -p "${blu}CSP header value: ${end}" header_csp
-	[[ $header_csp == "reload" && -s /opt/webinoly/templates/source/csp_webinoly.data ]] && header_csp=$(sed -n '1p' /opt/webinoly/templates/source/csp_webinoly.data)
-	if [[ -z $header_csp ]]; then
-		echo "${red}[ERROR] Invalid CSP header value!${end}"
-		exit 1
-	fi
-	
-	if [[ $(conf_read nginx) == "true" ]]; then
-		if [[ $header_csp == "off" ]]; then
-			sudo sed -i '/^add_header Content-Security-Policy/s/^/#/' /etc/nginx/common/headers-html.conf
-			sudo rm -rf /opt/webinoly/templates/source/csp_webinoly.data
-		else
-			[[ $csp_report_only == "on" ]] && local cspro="-Report-Only"
-			sudo sed -Ei "/^#?add_header Content-Security-Policy/c\add_header Content-Security-Policy${cspro} \"${header_csp}\";" /etc/nginx/common/headers-html.conf			
-		fi
-	fi
-	
-	if [[ $header_csp == "off" ]]; then
-		echo "${gre}CSP Header successfully disabled!${end}"
-	elif [[ $header_csp != "reload" ]]; then
-		if [[ ! -f /opt/webinoly/templates/source/csp_webinoly.data ]]; then
-			sudo touch /opt/webinoly/templates/source/csp_webinoly.data
-			sudo chmod 644 /opt/webinoly/templates/source/csp_webinoly.data
-			sudo chown -R root:root /opt/webinoly/templates/source/csp_webinoly.data
-		else
-			sudo truncate -s 0 /opt/webinoly/templates/source/csp_webinoly.data
-		fi
-		
-		echo "$header_csp" >> /opt/webinoly/templates/source/csp_webinoly.data
-		echo "${gre}HTTP Header successfully configured!${end}"
-	fi
-}
-
-
-http_header_permission_policy() {
-	if [[ $(conf_read nginx) == "true" ]]; then
-		if [[ $header_permission_policy == "off" ]]; then
-			sudo sed -i '/^add_header Permission-Policy/d' /etc/nginx/common/headers-html.conf
-			echo "${gre}Permission Policy Header successfully disabled!${end}"
-		elif [[ $header_permission_policy == "floc" ]]; then
-			echo "add_header Permission-Policy \"interest-cohort=()\";" >> /etc/nginx/common/headers-html.conf
-			echo "${gre}HTTP Header successfully configured!${end}"
-		else
-			echo "${red}[ERROR] Invalid value!${end}"
-			exit 1
-		fi
-	else
-		echo "${red}[ERROR] Nginx not found!${end}"
-		exit 1
-	fi
-}
-
-
 ext_db_save() {
 	if [[ $external_db_save == "purge" || -n $purge ]]; then
-		conf_delete external-dbu
-		conf_delete external-dbp
-		conf_delete external-dbh
-		conf_delete external-dbx
+		conf_delete external-dbu -commented
+		conf_delete external-dbp -commented
+		conf_delete external-dbh -commented
+		conf_delete external-dbx -commented
 		echo "${gre}External DB data successfully removed!${end}"
 	else
 		if [[ $external_db_save == "true" ]]; then

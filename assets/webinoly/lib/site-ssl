@@ -7,8 +7,15 @@
 ssl_nginx() {
 	sudo sed -i '/listen 80/c \	listen 443 ssl http2;' /etc/nginx/sites-available/$domain
 	sudo sed -i '/listen \[::\]:80/c \	listen [::]:443 ssl http2;' /etc/nginx/sites-available/$domain
-	sudo sed -i '/headers-http.conf/a \	include common/headers-https.conf;' /etc/nginx/sites-available/$domain
 	sudo sed -i '/server_name /r /opt/webinoly/templates/template-site-ssl' /etc/nginx/sites-available/$domain
+	
+	# Headers
+	sudo sed -i '/header.conf;/c \	include common/headers.conf;' /etc/nginx/sites-available/$domain
+	[[ -f /etc/nginx/sites-available/$(conf_read tools-port) ]] && sudo sed -i '/header.conf;/c \	include common/headers.conf;' /etc/nginx/sites-available/$(conf_read tools-port)
+	for pxy in "/etc/nginx/apps.d/${domain}"*-proxy.conf
+	do
+		[[ -f $pxy ]] && sudo sed -i '/headers-http.conf;/a \		include common/headers-https.conf;' $pxy
+	done
 	
 	[[ -n $add_to_wildcard ]] && cert=$add_to_wildcard || cert=$domain
 	sudo sed -i "/WebinolySSLstart/,/WebinolySSLend/{s/domain.com/$cert/}" /etc/nginx/sites-available/$domain
@@ -59,7 +66,7 @@ site_ssl_on() {
 	local path=$domain
 	
 	# Some validations to prevent errors when creating certs.
-	check_for_nginx_tool
+	check_for_nginx_tool_ssl -ask
 	if [[ -n $root && -f /etc/nginx/sites-available/$root ]]; then
 		path=$root
 	elif [[ -n $root && ! -f /etc/nginx/sites-available/$root ]]; then
@@ -109,7 +116,7 @@ site_ssl_on() {
 	# Create new certificate
 	local param="--email $cermail --no-eff-email --agree-tos --staple-ocsp"
 	[[ $must_staple == "on" ]] && param="$param --must-staple"
-	[[ $(conf_read debug) == "true" ]] && param="$param --test-cert"
+	[[ -n $test_cert ]] && param="$param --test-cert"
 	[[ $ssl == "force-renewal" ]] && param="$param --force-renewal"
 	[[ $subdomain == "true" ]] && local domset="-d $domain" || local domset="-d $domain -d www.$domain"
 	
@@ -138,6 +145,8 @@ site_ssl_on() {
 	# Existing cert
 	elif [[ -f /etc/letsencrypt/live/$domain/fullchain.pem ]]; then
 		echo "${blu}Certificate for${end} $domain ${blu}already exist and found, wait while we configure your server to use it!${end}"
+		[[ -z $test_cert && $(is_ssl_staging $domain) == "true" ]] && echo "${red}[WARNING] Cert found is a staging cert for testing.${end}"
+		[[ -n $test_cert && $(is_ssl_staging $domain) != "true" ]] && echo "${red}[WARNING] Test-Cert was requested and cert found is a real/normal cert.${end}"
 	fi
 	
 	
@@ -152,8 +161,8 @@ site_ssl_on() {
 			sudo chown root:crontab /var/spool/cron/crontabs/root
 		fi
 		
-		cronmail=$( sudo grep -F "MAILTO=" /var/spool/cron/crontabs/root )
-		cronrene=$( sudo grep -F "certbot renew" /var/spool/cron/crontabs/root )
+		local cronmail=$( sudo grep -F "MAILTO=" /var/spool/cron/crontabs/root )
+		local cronrene=$( sudo grep -F "certbot renew" /var/spool/cron/crontabs/root )
 		[[ -z $cronmail && -n $cermail && -z $cronrene ]] && echo "MAILTO=${cermail}" | sudo tee -a /var/spool/cron/crontabs/root > /dev/null
 		[[ -z $cronrene ]] && echo '15 3 * * 7 certbot renew --post-hook "service nginx restart"' | sudo tee -a /var/spool/cron/crontabs/root > /dev/null
 
@@ -168,7 +177,7 @@ site_ssl_on() {
 		echo "${end}"
 		exit 1
 	fi
-	[[ $(conf_read debug) == "true" ]] && echo "${red}[WARNING] Debug Mode is enabled, this SSL Cert is just for testing purpose and should not be used in production enviroments.${end}"
+	[[ -n $test_cert || $(is_ssl_staging $domain) == "true" ]] && echo "${red}[WARNING] Let's Encrypt Staging Environment is enabled, this SSL Cert is just for testing purpose and should not be used in production enviroments.${end}"
 }
 
 
@@ -210,9 +219,16 @@ site_ssl_off() {
 	
 	sudo sed -i '/listen 443/c \	listen 80;' /etc/nginx/sites-available/$domain
 	sudo sed -i '/listen \[::\]:443/c \	listen [::]:80;' /etc/nginx/sites-available/$domain
-	sudo sed -i '/headers-https.conf/d' /etc/nginx/sites-available/$domain
 	sudo sed -i '/WebinolySSLstart/,/WebinolySSLend/{/.*/d}' /etc/nginx/sites-available/$domain
 	sudo sed -i '/WebinolySSLredirectStart/,/WebinolySSLredirectEnd/{/.*/d}' /etc/nginx/sites-available/$domain
+	
+	# Headers
+	sudo sed -i '/headers.conf;/c \	include common/header.conf;' /etc/nginx/sites-available/$domain
+	[[ -f /etc/nginx/sites-available/$(conf_read tools-port) ]] && sudo sed -i '/headers.conf;/c \	include common/header.conf;' /etc/nginx/sites-available/$(conf_read tools-port)
+	for pxy in "/etc/nginx/apps.d/${domain}"*-proxy.conf
+	do
+		[[ -f $pxy ]] && sudo sed -i '/CacheStaticFiles/,/expires max;/{/headers-https.conf;/d}' $pxy
+	done
 	
 	# In case this domain is used as tools-site or default-site
 	if [[ $(conf_read default-site) == $domain ]]; then
@@ -226,7 +242,7 @@ site_ssl_off() {
 		echo "${gre}${dim}Tools Site updated with SSL!${end}"
 	fi
 	
-	[[ $(is_wp $domain) == "true" ]] && edit_wp_db_url $domain "http://${domain}"
+	[[ -z $no_db_update && $(is_wp $domain) == "true" ]] && edit_wp_db_url $domain "http://${domain}"
 	
 	# Check if exist to not try to revoke a cert that don't exist, for example a site with a cert added to a wildcard! (-add-to-wildcard)
 	if [[ -f /etc/letsencrypt/renewal/${domain}.conf ]]; then

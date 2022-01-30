@@ -1,14 +1,19 @@
 #!/bin/bash
 
 echo "${red}"
-echo "Your server configuration will be updated and all changes you manually did will be lost!!"
-echo "${blu}Current server version 'v$oldver' will be upgraded to the newest 'v$newver'. Wait...${end}"
+echo "[WARNING] Your server configuration will be updated and all changes you manually did will be lost!!"
+echo "${blu}Current server version 'v$oldver' will be upgraded to the newest 'v$newver'."
+echo "${bol}"
+read -n 1 -s -r -p "Press any key to continue..."
+echo ""
+echo "${end}${dim}This is going to take a little bit of time...${end}"
+sleep 1
 
 
 # v1.5.0
 onezero_to_oneone() {
 	
-	if [[ $(conf_read mysql-tool) == "true" ]]; then
+	if [[ $(conf_read mysql-tool-pma) == "true" ]]; then
 		# Remove old phpMyAdmin
 		echo "phpmyadmin      phpmyadmin/dbconfig-remove      boolean true" | debconf-set-selections
 		echo "phpmyadmin      phpmyadmin/purge        boolean true" | debconf-set-selections
@@ -24,7 +29,7 @@ onezero_to_oneone() {
 	if [[ $(conf_read nginx-tool) == "true" ]]; then
 		# Install LetsEncrypt
 		echo | sudo add-apt-repository ppa:certbot/certbot
-		pre_install
+		sudo apt -qq update
 		sudo apt-get -y install certbot
 		
 		cronrene=$( sudo grep -F "letsencrypt renew" /var/spool/cron/crontabs/root )
@@ -57,7 +62,7 @@ onetwo_to_onethree() {
 	for site in "/etc/nginx/sites-available"/*
 	do
 		domi=$(echo $site | cut -f 5 -d "/")
-		[[ $domi != "html" && $domi != 22222 ]] && sudo sed -i "/ssl on;/c\	#ssl on;" /etc/nginx/sites-available/$domi
+		[[ $domi != "html" && $domi != $(conf_read tools-port) ]] && sudo sed -i "/ssl on;/c\	#ssl on;" /etc/nginx/sites-available/$domi
 	done
 	
 	# swappines is now included by default in linux optimization.
@@ -97,7 +102,6 @@ onethree_to_onefour() {
 				
 				if [[ $(is_wp $domi) == "true" ]]; then
 					[[ $(conf_read wp-admin-auth) == "purged" ]] && sudo httpauth $domi -wp-admin=off
-					[[ $(conf_read yoast-sitemap) == "true" ]] && sudo site $domi -yoast-sitemap=on
 				fi
 			fi
 		done
@@ -139,13 +143,14 @@ onefive_to_onesix() {
 	fi
 	
 	#Fix new Nginx repo
+	sudo apt update
 	sudo apt-get install -y -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' nginx
 	[[ $(conf_read php) != "true" ]] && sudo apt-key del E5267A6C # ondrej
 	
 	# Just to be sure in case of added with new nginx package
 	[[ -f /etc/nginx/conf.d/default.conf ]] && sudo rm /etc/nginx/conf.d/default.conf
 	
-	sudo nginx -t && sudo service nginx start
+	sudo nginx -t && sudo systemctl start nginx
 	sudo systemctl enable nginx
 	
 	[[ $(conf_read php) == "true" ]] && sudo apt -y install ghostscript
@@ -172,19 +177,104 @@ onefive_to_onesix() {
 }
 
 
+# v1.16.0
+onesix_to_oneseven() {
+	[[ $(conf_read php-tool) == "true" && -f /etc/postfix/main.cf ]] && sudo sed -i '/smtpd_banner =/c \smtpd_banner = $myhostname ESMTP' /etc/postfix/main.cf
+	[[ $(conf_read mysql-client) == "true" && -z $(conf_read mysql-ver) ]] && conf_write mysql-ver $(sudo mysql -V | cut -f 6 -d " " -s | cut -f -2 -d "." -s)
+	
+	[[ $(conf_read mysql) == "true" ]] && conf_write mysql-optim true
+	[[ $(conf_read mysql-tool) == "true" ]] && conf_write mysql-tool-pma true && conf_delete mysql-tool
+	[[ $(conf_read nginx-tool) == "true" ]] && conf_write nginx-tool-ssl true && conf_write nginx-tool-bkp true && conf_delete nginx-tool
+	[[ $(conf_read php-tool) == "true" ]] && conf_write php-tool-postfix true && conf_write php-tool-redis true && conf_write php-tool-memcached true && conf_delete php-tool
+	
+	
+	if [[ -s /opt/webinoly/templates/source/csp_webinoly.data ]]; then
+		conf_write header-csp "$(sed -n '1p' /opt/webinoly/templates/source/csp_webinoly.data)"
+		sudo mv /opt/webinoly/templates/source/csp_webinoly.data /opt/webinoly/templates/source/csp_webinoly.data.old
+	fi
+	if [[ -s /opt/webinoly/templates/source/pph_webinoly.data ]]; then
+		conf_write header-permissions "$(sed -n '1p' /opt/webinoly/templates/source/pph_webinoly.data)"
+		sudo mv /opt/webinoly/templates/source/pph_webinoly.data /opt/webinoly/templates/source/pph_webinoly.data.old
+	fi
+	if [[ -s /opt/webinoly/templates/source/cch_webinoly.data ]]; then
+		conf_write header-cache-control "$(sed -n '1p' /opt/webinoly/templates/source/cch_webinoly.data)"
+		sudo mv /opt/webinoly/templates/source/cch_webinoly.data /opt/webinoly/templates/source/cch_webinoly.data.old
+	fi
+	if [[ -s /opt/webinoly/templates/source/rob_webinoly.data ]]; then
+		conf_write header-robots "$(sed -n '1p' /opt/webinoly/templates/source/rob_webinoly.data)"
+		sudo mv /opt/webinoly/templates/source/rob_webinoly.data /opt/webinoly/templates/source/rob_webinoly.data.old
+	fi
+	
+	
+	for site in "/etc/nginx/sites-available"/*
+	do
+		local domi=$(echo $site | cut -f 5 -d "/")
+		if [[ $domi != "html" && $domi != $(conf_read tools-port) && -f /etc/nginx/sites-available/$domi ]]; then
+			sudo sed -i '/headers-html.conf;/d' /etc/nginx/sites-available/$domi
+			sudo sed -i '/headers-https.conf;/d' /etc/nginx/sites-available/$domi
+			if [[ $(is_ssl $domi) == "true" ]]; then
+				sudo sed -i '/headers-http.conf;/c \	include common/headers.conf;' /etc/nginx/sites-available/$domi
+			else
+				sudo sed -i '/headers-http.conf;/c \	include common/header.conf;' /etc/nginx/sites-available/$domi
+				
+				for pxy in "/etc/nginx/apps.d/${domi}"*-proxy.conf
+				do
+					[[ -f $pxy ]] && sudo sed -i '/CacheStaticFiles/,/expires max;/{/headers-https.conf;/d}' $pxy
+				done
+			fi
+			
+			if [[ $(is_parked $domi) == "true" ]]; then
+				local main=$(grep -G "root .*;" /etc/nginx/sites-available/$domi | cut -d'/' -f 4)
+				if [[ -f /etc/nginx/sites-available/$main ]]; then
+					sed -i "/include \/var\/www\/$main/a \	include \/var\/www\/${main}/*-$(echo $domi | sed "s/[^0-9A-Za-z]/_/g")_parked.conf;" /etc/nginx/sites-available/$domi
+				fi
+			fi
+		fi		
+	done
+	
+	if [[ -f /opt/webinoly/webinoly.conf ]]; then
+		mv /opt/webinoly/webinoly.conf /opt/webinoly/webinoly.conf.old
+		IFS=$'\n' # FOR loop takes whitespace as a delimiter, so IFS overwrite this.
+		for i in $(grep -E "^([a-z\-]+)\:.*$" /opt/webinoly/webinoly.conf.old)
+		do
+			conf_write $(echo $i | cut -d':' -f 1 -s) $(echo $i | cut -d':' -f 2- -s)
+		done
+	fi
+	
+	[[ $(conf_read php) != "true" && $(conf_read nginx) == "true" ]] && nginx_tool_site
+	#[[ $(conf_read php) == "true" ]] && sudo apt -y install php$(conf_read php-ver)-intl
+	
+	if [[ $(conf_read nginx-tool-bkp) == "true" ]]; then
+		sudo apt -y purge duplicity duply python-boto
+		conf_write nginx-tool-bkp purged
+		[[ $(check_osname) == "bionic" ]] && sudo apt -y install python3-boto # Not break the old profiles
+		local reinstall_bkp="true"
+	fi
+	if [[ $(conf_read php-tool-redis) == "true" ]]; then
+		sudo apt -y purge redis-server
+		echo | sudo add-apt-repository --remove 'ppa:chris-lea/redis-server'
+		sudo apt-key del C7917B12
+		conf_write php-tool-redis purged
+		local reinstall_redis="true"
+	fi
+	
+	# All of these is here separated to prevent errors when verify runs inside the stack command
+	sudo webinoly -server-reset=nginx
+	[[ -n $reinstall_bkp ]] && stack -backups
+	[[ -n $reinstall_redis ]] && stack -redis
+	
+	sudo apt -yqq autoremove
+}
+
+
 # Version numbers without point
-[[ ${oldver//.} -lt 11 ]] && onezero_to_oneone > /dev/null 2>&1 &
-wait $!
-[[ ${oldver//.} -lt 12 ]] && oneone_to_onetwo > /dev/null 2>&1 &
-wait $!
-[[ ${oldver//.} -lt 13 ]] && onetwo_to_onethree > /dev/null 2>&1 &
-wait $!
-[[ ${oldver//.} -lt 14 ]] && onethree_to_onefour > /dev/null 2>&1 &
-wait $!
-[[ ${oldver//.} -lt 15 ]] && onefour_to_onefive > /dev/null 2>&1 &
-wait $!
-[[ ${oldver//.} -lt 16 ]] && onefive_to_onesix > /dev/null 2>&1 &
-wait $!
+[[ ${oldver//.} -lt 11 ]] && onezero_to_oneone
+[[ ${oldver//.} -lt 12 ]] && oneone_to_onetwo
+[[ ${oldver//.} -lt 13 ]] && onetwo_to_onethree
+[[ ${oldver//.} -lt 14 ]] && onethree_to_onefour
+[[ ${oldver//.} -lt 15 ]] && onefour_to_onefive
+[[ ${oldver//.} -lt 16 ]] && onefive_to_onesix
+[[ ${oldver//.} -lt 17 ]] && onesix_to_oneseven
 
 
 sudo webinoly -server-reset
