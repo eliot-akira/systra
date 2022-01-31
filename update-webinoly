@@ -4,14 +4,14 @@ SCRIPTPATH=$(dirname $(readlink -f "$0"))
 . $SCRIPTPATH/common
 
 sudo rm -rf /opt/webinoly/lib
-sudo rm -rf /opt/webinoly/plugins
+sudo rm -rf /opt/webinoly/usr
 if [ -d /opt/webinoly/templates/source ]; then
   sudo mv /opt/webinoly/templates/source /opt/webinoly/templates-source
 fi
 sudo rm -rf /opt/webinoly/templates
 
 sudo cp -r $SCRIPTPATH/assets/webinoly/lib /opt/webinoly
-sudo cp -r $SCRIPTPATH/assets/webinoly/plugins /opt/webinoly
+sudo cp -r $SCRIPTPATH/assets/webinoly/usr /opt/webinoly
 sudo cp -r $SCRIPTPATH/assets/webinoly/templates /opt/webinoly
 
 if [ -d /opt/webinoly/templates-source ]; then
@@ -23,8 +23,8 @@ sudo find /opt/webinoly -type d -exec chmod 755 {} \;
 sudo find /opt/webinoly -type f -exec chmod 644 {} \;
 sudo chmod -f 744 /opt/webinoly/lib/ex-*
 
-sudo chmod 755 /opt/webinoly/plugins/*
-sudo cp /opt/webinoly/plugins/* /usr/bin/
+sudo chmod 755 /opt/webinoly/usr/*
+sudo cp /opt/webinoly/usr/* /usr/bin/
 
 # sudo webinoly -update
 echo "Updated Webinoly scripts"
