@@ -47,7 +47,7 @@ clearp() {
   if [ -z "$1" ]; then
     echo -e "\nClear file and folder permissions\n"
     echo -e "Usage: clearp [folder name or .]\n"
-    exit
+    return
   fi
   DIR="$1"
   sudo chown www-data:www-data -R $DIR/*
@@ -56,6 +56,8 @@ clearp() {
   sudo find $DIR -type d -exec chmod 2775 {} \;
   sudo find $DIR -type f -exec chmod ug+rw {} \;
 }
+
+alias nginx-reload='sudo nginx -t && echo -n "Press enter if test passed - Otherwise press CTRL + C to stop.." && read && echo -e "\nRestarting NGINX.." && sudo service nginx reload'
 
 alias www='sudo -u www-data'
 alias wp='sudo -u www-data ~/bin/wp'

@@ -86,7 +86,7 @@ if [ ! -d /opt/webinoly ]; then
   # Allow default user to edit served files
 
   sudo usermod -a -G www-data $USER
-  sudo chown www-data:www-data -R /var/www
+  sudo chown -R $USER:www-data /var/www # Previously: www-data:www-data
   sudo chgrp -R www-data /var/www/*
   sudo chmod -R g+rw /var/www
 
@@ -99,10 +99,10 @@ if [ ! -d /opt/webinoly ]; then
   sudo -u root bash -c 'echo -e "\nfs.inotify.max_user_watches=524288\n" >> /etc/sysctl.conf'
   sudo sysctl -p &> /dev/null
 
+  # Show MySQL credentials: sudo webinoly -dbpass
 
-  echo -e "\nMake note of the above credentials, then run: sys install\n"
-
-  exit
+  # echo -e "\nMake note of the above credentials, then run: sys install\n"
+  # exit
 fi
 
 if [ ! -f ~/bin/composer ]; then

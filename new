@@ -34,16 +34,23 @@ if [ -z "$SUBFOLDER" ]; then
   # All new files and directories are owned by www-data group - and editable by $USER
   sudo chmod -R g+rw /var/www/$DOMAIN_NAME/htdocs
 
+  # sudo chown -R www-data:ubuntu /var/www/$DOMAIN_NAME/htdocs # Or ubuntu:www-data
+
   echo -e "\nSite installed at ~/apps/$DOMAIN_NAME"
 
 
   echo -n "Prepare HTTPS (Y/n)? "
   read answer
   if [ "$answer" != "${answer#[Nn]}" ] ;then
+
+    echo "Site URL: http://$DOMAIN_NAME"
+
     exit # No
   fi
 
   sudo site $DOMAIN_NAME -ssl=on
+
+  echo "Site URL: https://$DOMAIN_NAME"
 
   exit
 fi
@@ -51,13 +58,13 @@ fi
 
 # Subfolder of existing site
 
-echo "Creating child site at $DOMAIN_NAME/$SUBFOLDER"
-enter-when-ready
-
 if [ ! -L ~/apps/$DOMAIN_NAME ]; then
   echo "Site not found: ~/apps/$DOMAIN_NAME"
   exit
 fi
+
+echo "Creating child site at $DOMAIN_NAME/$SUBFOLDER"
+enter-when-ready
 
 sudo site $DOMAIN_NAME -subfolder=/$SUBFOLDER -wp -force-redirect=root
 sudo httpauth $DOMAIN_NAME -subfolder=/$SUBFOLDER -wp-admin=off &> /dev/null
@@ -66,3 +73,6 @@ sudo httpauth $DOMAIN_NAME -subfolder=/$SUBFOLDER -wp-admin=off &> /dev/null
 sudo chmod -R g+rw /var/www/$DOMAIN_NAME/htdocs/$SUBFOLDER
 
 echo -e "\nSite installed at ~/apps/$DOMAIN_NAME/$SUBFOLDER"
+
+# If parent site has ssl
+# echo "Site URL: https://$DOMAIN_NAME"
