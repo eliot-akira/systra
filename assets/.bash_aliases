@@ -44,12 +44,12 @@ alias grr='function grr(){ grep -rHIn --exclude-dir=public --exclude-dir=*/_* --
 # Server management
 
 clearp() {
-  if [ -z "$1" ]; then
-    echo -e "\nClear file and folder permissions\n"
-    echo -e "Usage: clearp [folder name or .]\n"
-    return
+  echo "Clearing file and folder permissions.."
+  if [ ! -z "$1" ]; then
+    DIR="$1"
+  else
+    DIR=.
   fi
-  DIR="$1"
   sudo chown www-data:www-data -R $DIR/*
   sudo chgrp -R www-data $DIR
   sudo chmod -R g+rw $DIR
