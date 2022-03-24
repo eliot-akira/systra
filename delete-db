@@ -1,0 +1,19 @@
+#!/bin/bash
+
+if [ -z $1 ]; then
+  echo -e "Delete database\n\nUsage:\n"
+  echo "  delete-db [name]  Delete database by name"
+  echo
+  echo "To see a list of databases, run: sys list-db"
+  echo
+  exit
+fi
+
+SCRIPTPATH=$(dirname $(readlink -f "$0"))
+. $SCRIPTPATH/common
+
+DB_NAME=$1
+
+# Assumes database and user have the same name
+
+sudo mysql --connect-timeout=10 --user=admin -p$(echo $(sudo webinoly -conf-read=mysql-admin) | openssl enc -d -a -salt) -e "DELETE FROM mysql.user WHERE User='$DB_NAME';DROP DATABASE IF EXISTS $DB_NAME;DELETE FROM mysql.db WHERE Db='$DB_NAME' OR Db='$DB_NAME\\_%';FLUSH PRIVILEGES"
