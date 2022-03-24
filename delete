@@ -1,7 +1,7 @@
 #!/bin/bash
 
 if [ -z $1 ]; then
-  echo -e "Delete a site\n\nUsage:"
+  echo -e "Delete a site\n\nUsage:\n"
   echo "  delete [domain]           Delete site"
   echo "  delete [domain] [folder]  Delete child site"
   echo
@@ -19,7 +19,7 @@ if [ -z "$SUBFOLDER" ]; then
   echo "Deleting site at $DOMAIN_NAME"
   enter-when-ready
 
-  sudo site $DOMAIN_NAME -delete
+  sudo site $DOMAIN_NAME -delete=force
 
   if [ -L ~/apps/$DOMAIN_NAME ]; then
     rm ~/apps/$DOMAIN_NAME
@@ -50,6 +50,6 @@ if [ ! -d $CHILD_SITE_PATH ]; then
   exit
 fi
 
-sudo site $DOMAIN_NAME -subfolder=/$SUBFOLDER -delete
+sudo site $DOMAIN_NAME -subfolder=/$SUBFOLDER -delete=force
 
 echo -e "\nSite deleted from $CHILD_SITE_PATH"
