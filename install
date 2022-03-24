@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -eou pipefail
 
 # Get absolute path this script is in, for example: /home/$USER/bin
 SCRIPTPATH=$(dirname $(readlink -f "$0"))
@@ -11,26 +12,30 @@ if [ ! -f ~/.bash_aliases ]; then
   echo -e "Set up shell environment"
   enter-when-ready
 
-  cp $SCRIPTPATH/assets/.profile ~
-  cp $SCRIPTPATH/assets/.bash_aliases ~
-
   mkdir -p ~/apps
   mkdir -p ~/bin
 
-  # if [ -d ~/bin/systra ]; then
-  #   rm -rf ~/bin/systra
-  # fi
+  cp $SCRIPTPATH/assets/.profile ~
+  cp $SCRIPTPATH/assets/.bash_aliases ~
 
+  # Cron job report wrapper - See ./assets/crontab-template.txt
+  cp $SCRIPTPATH/assets/cronic ~/bin
+
+  # Move installed folder
   mv $SCRIPTPATH ~/bin/systra
   ln -s ~/bin/systra/sys ~/bin/sys
 
-  echo -e "\nRun: source ~/.profile && sys install\n"
+  sudo apt-get update
+  sudo apt install trash-cli
+
+  echo -e "\nRun the following command: source ~/.profile && sys install\n"
   exit
 fi
 
 if [ ! -d /opt/webinoly ]; then
 
-  echo -e "Install web server - NGINX, MariaDB, PHP"
+  echo "Install web server - NGINX, MariaDB, PHP"
+  echo "This will take a few minutes"
   enter-when-ready
 
   ### Previously depended on external URL
@@ -43,7 +48,7 @@ if [ ! -d /opt/webinoly ]; then
   sudo cp -r $SCRIPTPATH/assets/webinoly/usr /opt/webinoly
   sudo cp -r $SCRIPTPATH/assets/webinoly/templates /opt/webinoly
 
-  ### Below based on weby script --->
+  ### Based on assets/webinoly/weby --->
 
   sudo mkdir -p /opt/webinoly/templates/source
   sudo find /opt/webinoly -type d -exec chmod 755 {} \;
@@ -55,25 +60,40 @@ if [ ! -d /opt/webinoly ]; then
 
   ### <---
 
-  sudo -u root bash -c 'source /opt/webinoly/lib/general && webinoly -conf-value_app-version=$app_version'
+  sudo -u root bash -c 'source /opt/webinoly/lib/general && webinoly -conf-value_app-version=$app_version' &> /dev/null
 
+  # Increase upload limit
   sudo webinoly -conf-value_max-mb-uploads=200 &> /dev/null
-  sudo webinoly -conf-value_nginx-ppa=mainline &> /dev/null
 
   # Disable XMLRPC - See assets/webinoly/lib/install, nginx_optim()
   # Updates /etc/nginx/common/wpcommon.conf, /etc/nginx/common/wpcommon-noauth.conf
   sudo webinoly -conf-value_xmlrpc=blocked &> /dev/null
 
+  # Let user manually enter email
+  echo "Email address will be used for sending server error notification - it can be empty"
+  sudo webinoly -email # Saved in /opt/webinoly/webinoly.conf
 
-  # Timezone is set automatically to local machine?
-  # TODO: If empty, let user enter timezone
+  # Timezone
 
-  # List of timezones: https://www.php.net/manual/en/timezones.php
-  # ..Or run: ls /usr/share/zoneinfo
-  # sudo webinoly -timezone=Europe/Prague
+  # Check if set automatically to local machine
+  TIMEZONE=`cat /etc/timezone`
+  if [ ! -z "$TIMEZONE" ]; then
+    sudo webinoly -timezone=$TIMEZONE
+  else
+    # List all available timezones
+    # See also https://www.php.net/manual/en/timezones.php
+    # Or run: ls /usr/share/zoneinfo
+    timedatectl list-timezones --no-pager
 
-  sudo webinoly -email # Mail address saved in /opt/webinoly/webinoly.conf
-  sudo webinoly -timezone
+    # Let user manually enter timezone
+    sudo webinoly -timezone
+  fi
+
+  # MariaDB >= 10.6 does not support character set "utf8" (must use utf8md3 or utf8md4), which breaks Duplicator packages from older servers
+  sudo stack -mysql-ver=10.5
+
+  # Use PHP 7.4 by default until better support for PHP 8 in WordPress ecosystem
+  sudo stack -php-ver=7.4
 
   sudo stack -lemp
 
@@ -85,12 +105,22 @@ if [ ! -d /opt/webinoly ]; then
 
   # Allow default user to edit served files
 
-  sudo usermod -a -G www-data $USER
-  sudo chown -R $USER:www-data /var/www # Previously: www-data:www-data
-  sudo chgrp -R www-data /var/www/*
-  sudo chmod -R g+rw /var/www
+  # Revert change made by assets/webinoly/lib/install, nginx_optim()
+  # When it's set to "no", the umask 022 is interpreted as -rw-r--r--
+  # When it's set to "yes", it is interpreted as -rw-rw-r-- (Writable by group)
+  # We want the latter, so www-data user (PHP process) can modify files created
+  # by other users of the group, i.e, ubuntu
+  sudo sed -i '/USERGROUPS_ENAB/c \USERGROUPS_ENAB yes' /etc/login.defs
+
+  sudo usermod -aG www-data $USER
+
+  sudo chown -R www-data:www-data /var/www # Was $USER:www-data
 
   # All new files and directories created under /var/www are owned by the www-data group.
+
+  sudo chgrp -R www-data /var/www
+  sudo chmod -R g+rw /var/www
+
   sudo find /var/www -type d -exec chmod 2775 {} \;
   sudo find /var/www -type f -exec chmod ug+rw {} \;
 
@@ -99,7 +129,7 @@ if [ ! -d /opt/webinoly ]; then
   sudo -u root bash -c 'echo -e "\nfs.inotify.max_user_watches=524288\n" >> /etc/sysctl.conf'
   sudo sysctl -p &> /dev/null
 
-  # Show MySQL credentials: sudo webinoly -dbpass
+  echo -e "\nIf you need to see MySQL credentials in the future, run: sudo webinoly -dbpass\n"
 
   # echo -e "\nMake note of the above credentials, then run: sys install\n"
   # exit
@@ -133,33 +163,23 @@ if [ ! -d ~/n ]; then
   echo -e "Install Node.js - JavaScript runtime"
   enter-when-ready
 
-  sudo apt-get update
+  # sudo apt-get update
   sudo apt-get install build-essential
   curl -L https://git.io/n-install | bash
 
-  echo -e "\nRun: source ~/.profile && sys install\n"
+  echo -e "\nRun the following command: source ~/.profile && sys install\n"
   exit
 fi
 
-if [ ! -f ~/n/bin/yarn ]; then
-
-  echo -e "Install Yarn - Package manager for Node.js"
-  enter-when-ready
-
-  npm install --global yarn
-  echo
-fi
-
-if [ ! -f ~/.yarn/bin/pm2 ]; then
+if [ ! -f ~/n/bin/pm2 ]; then
 
   echo -e "Install PM2 - Process manager for Node.js"
   enter-when-ready
 
-  yarn global add pm2
+  npm install pm2@latest -g
 
   # https://pm2.keymetrics.io/docs/usage/startup/
   pm2 startup
-
 
   # Copy crontab template, replace placeholders, load cron
 
@@ -173,11 +193,12 @@ if [ ! -f ~/.yarn/bin/pm2 ]; then
   crontab ~/crontab-tmp.txt
   rm ~/crontab-tmp.txt
 
-  # PM2 install ends with command: sudo env PATH=$PATH:/home/ubuntu/n/bin /home/ubuntu/.config/yarn/global/node_modules/pm2/bin/pm2 startup systemd -u ubuntu --hp /home/ubuntu
-  echo -e "\nRun the above command, then run: sys install\n"
+  # PM2 install ends with command: sudo env PATH=$PATH:/home/$USER/n/bin /home/$USER/.config/yarn/global/node_modules/pm2/bin/pm2 startup systemd -u $USER --hp /home/$USER
+  echo -e "\nRun the above command, then: sys install\n"
 
-  # When upgrading Node.js, run:
-  # pm2 unstartup && pm2 startup
+  # The following is not necessary because we use "n" to manage Node.js versions,
+  # and the symlinked binary is always in the same location
+  # echo "If you upgrade Node.js in the future, run: pm2 unstartup && pm2 startup"
 
   exit
 fi

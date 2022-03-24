@@ -1,7 +1,7 @@
 #!/bin/bash
 
 if [ -z $1 ]; then
-  echo -e "Create a new site\n\nUsage:"
+  echo -e "Create a new site\n\nUsage:\n"
   echo "  new [domain]              Create new site"
   echo "  new [domain] [folder]     Create new child site"
   echo
@@ -23,6 +23,10 @@ if [ -z "$SUBFOLDER" ]; then
   # Create site - Redirect www -> root domain
   sudo site $DOMAIN_NAME -wp -force-redirect=root
 
+  if [ ! -f "/var/www/$DOMAIN_NAME/wp-config.php" ]; then
+    exit
+  fi
+
   # Don't put wp-admin under HTTP Basic Auth
   sudo httpauth $DOMAIN_NAME -wp-admin=off &> /dev/null
 
@@ -32,13 +36,21 @@ if [ -z "$SUBFOLDER" ]; then
   sudo mv /var/www/$DOMAIN_NAME/wp-config.php ~/apps/$DOMAIN_NAME
 
   # All new files and directories are owned by www-data group - and editable by $USER
+  # sudo chown -R $USER:www-data /var/www/$DOMAIN_NAME/htdocs
   sudo chmod -R g+rw /var/www/$DOMAIN_NAME/htdocs
 
-  # sudo chown -R www-data:ubuntu /var/www/$DOMAIN_NAME/htdocs # Or ubuntu:www-data
+
+  # Remove default plugins - At this point the blank site is not installed
+  if [ -d "/home/$USER/apps/$DOMAIN_NAME/wp-content/plugins/akismet" ]; then
+    rm -rf "/home/$USER/apps/$DOMAIN_NAME/wp-content/plugins/akismet"
+  fi
+  if [ -f "/home/$USER/apps/$DOMAIN_NAME/wp-content/plugins/hello.php" ]; then
+    rm "/home/$USER/apps/$DOMAIN_NAME/wp-content/plugins/hello.php"
+  fi
 
   echo -e "\nSite installed at ~/apps/$DOMAIN_NAME"
 
-
+  echo
   echo -n "Prepare HTTPS (Y/n)? "
   read answer
   if [ "$answer" != "${answer#[Nn]}" ] ;then
@@ -70,7 +82,16 @@ sudo site $DOMAIN_NAME -subfolder=/$SUBFOLDER -wp -force-redirect=root
 sudo httpauth $DOMAIN_NAME -subfolder=/$SUBFOLDER -wp-admin=off &> /dev/null
 
 # All new files and directories are owned by www-data group - and editable by $USER
+# sudo chown -R $USER:www-data /var/www/$DOMAIN_NAME/htdocs/$SUBFOLDER
 sudo chmod -R g+rw /var/www/$DOMAIN_NAME/htdocs/$SUBFOLDER
+
+# Remove default plugins - At this point the blank site is not installed
+if [ -d "/home/$USER/apps/$DOMAIN_NAME/$SUBFOLDER/wp-content/plugins/akismet" ]; then
+  rm -rf "/home/$USER/apps/$DOMAIN_NAME/$SUBFOLDER/wp-content/plugins/akismet"
+fi
+if [ -f "/home/$USER/apps/$DOMAIN_NAME/$SUBFOLDER/wp-content/plugins/hello.php" ]; then
+  rm "/home/$USER/apps/$DOMAIN_NAME/$SUBFOLDER/wp-content/plugins/hello.php"
+fi
 
 echo -e "\nSite installed at ~/apps/$DOMAIN_NAME/$SUBFOLDER"
 

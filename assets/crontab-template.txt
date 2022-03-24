@@ -1,8 +1,11 @@
 MAILTO=__EMAIL__
 MAILFROM=__EMAIL__
 
+# Use [cronic](https://habilis.net/cronic/) to wrap cron jobs, so it
+# only sends email when an error has occurred.
+
 # Restart process manager on server reboot
-@reboot /home/__USER__/n/bin/node /home/__USER__/n/bin/pm2 resurrect >/dev/null
+@reboot /home/__USER__/bin/cronic /home/__USER__/n/bin/node /home/__USER__/n/bin/pm2 resurrect
 
 # Save process state
-*/5 * * * * /home/__USER__/n/bin/node /home/__USER__/n/bin/pm2 save >/dev/null
+*/5 * * * * /home/__USER__/bin/cronic /home/__USER__/n/bin/node /home/__USER__/n/bin/pm2 save
