@@ -71,6 +71,9 @@ if [ ! -d /opt/webinoly ]; then
 
   # Let user manually enter email
   echo "Email address will be used for sending server error notification - it can be empty"
+
+  # TODO: Read input, skip if empty
+
   sudo webinoly -email # Saved in /opt/webinoly/webinoly.conf
 
   # Timezone
@@ -179,13 +182,17 @@ if [ ! -f ~/n/bin/pm2 ]; then
   npm install pm2@latest -g
 
   # https://pm2.keymetrics.io/docs/usage/startup/
-  pm2 startup
+  pm2 startup || true
 
   # Copy crontab template, replace placeholders, load cron
 
   cp $SCRIPTPATH/assets/crontab-template.txt ~/crontab-tmp.txt
 
   EMAIL=$(sudo webinoly -conf-read=mail) # Mail address from /opt/webinoly/webinoly.conf
+
+  if [ -z "$EMAIL" ]; then
+    EMAIL="''" # Empty value for crontab
+  fi
 
   sed -i "s/__USER__/$USER/g" ~/crontab-tmp.txt
   sed -i "s/__EMAIL__/$EMAIL/g" ~/crontab-tmp.txt
@@ -195,7 +202,7 @@ if [ ! -f ~/n/bin/pm2 ]; then
 
   # PM2 install ends with command: sudo env PATH=$PATH:/home/$USER/n/bin /home/$USER/.config/yarn/global/node_modules/pm2/bin/pm2 startup systemd -u $USER --hp /home/$USER
   echo -e "\nRun the above command, then: sys install\n"
-
+ /home/ubuntu/n/lib/node_modules/pm2/bin/pm2 startup systemd -u ubuntu --hp /home/ubuntu
   # The following is not necessary because we use "n" to manage Node.js versions,
   # and the symlinked binary is always in the same location
   # echo "If you upgrade Node.js in the future, run: pm2 unstartup && pm2 startup"
