@@ -1,6 +1,7 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -eou pipefail
 
-if [ -z $1 ]; then
+if [ -z ${1-} ]; then
   echo -e "Create a new site\n\nUsage:\n"
   echo "  new [domain]              Create new site"
   echo "  new [domain] [folder]     Create new child site"
@@ -12,18 +13,18 @@ SCRIPTPATH=$(dirname $(readlink -f "$0"))
 . $SCRIPTPATH/common
 
 DOMAIN_NAME=$1
-SUBFOLDER=$2
+SUBFOLDER=${2-}
 
 if [ -z "$SUBFOLDER" ]; then
 
   echo "Creating site at $DOMAIN_NAME"
   enter-when-ready
 
-
   # Create site - Redirect www -> root domain
   sudo site $DOMAIN_NAME -wp -force-redirect=root
 
   if [ ! -f "/var/www/$DOMAIN_NAME/wp-config.php" ]; then
+    # Error: Site was not created
     exit
   fi
 
@@ -39,14 +40,19 @@ if [ -z "$SUBFOLDER" ]; then
   # sudo chown -R $USER:www-data /var/www/$DOMAIN_NAME/htdocs
   sudo chmod -R g+rw /var/www/$DOMAIN_NAME/htdocs
 
+  pushd "/home/$USER/apps/$DOMAIN_NAME/" &>/dev/null
+
+  wp rewrite structure '/%postname%'
 
   # Remove default plugins - At this point the blank site is not installed
-  if [ -d "/home/$USER/apps/$DOMAIN_NAME/wp-content/plugins/akismet" ]; then
+  if [ -d "wp-content/plugins/akismet" ]; then
     rm -rf "/home/$USER/apps/$DOMAIN_NAME/wp-content/plugins/akismet"
   fi
-  if [ -f "/home/$USER/apps/$DOMAIN_NAME/wp-content/plugins/hello.php" ]; then
-    rm "/home/$USER/apps/$DOMAIN_NAME/wp-content/plugins/hello.php"
+  if [ -f "wp-content/plugins/hello.php" ]; then
+    rm "wp-content/plugins/hello.php"
   fi
+
+  popd
 
   echo -e "\nSite installed at ~/apps/$DOMAIN_NAME"
 
@@ -79,19 +85,31 @@ echo "Creating child site at $DOMAIN_NAME/$SUBFOLDER"
 enter-when-ready
 
 sudo site $DOMAIN_NAME -subfolder=/$SUBFOLDER -wp -force-redirect=root
+
+if [ ! -f "/home/$USER/apps/$DOMAIN_NAME/$SUBFOLDER/wp-config.php" ]; then
+  # Error: Site was not created
+  exit
+fi
+
 sudo httpauth $DOMAIN_NAME -subfolder=/$SUBFOLDER -wp-admin=off &> /dev/null
 
 # All new files and directories are owned by www-data group - and editable by $USER
 # sudo chown -R $USER:www-data /var/www/$DOMAIN_NAME/htdocs/$SUBFOLDER
 sudo chmod -R g+rw /var/www/$DOMAIN_NAME/htdocs/$SUBFOLDER
 
+pushd "/home/$USER/apps/$DOMAIN_NAME/$SUBFOLDER/" &>/dev/null
+
+wp rewrite structure '/%postname%'
+
 # Remove default plugins - At this point the blank site is not installed
-if [ -d "/home/$USER/apps/$DOMAIN_NAME/$SUBFOLDER/wp-content/plugins/akismet" ]; then
-  rm -rf "/home/$USER/apps/$DOMAIN_NAME/$SUBFOLDER/wp-content/plugins/akismet"
+if [ -d "wp-content/plugins/akismet" ]; then
+  rm -rf "wp-content/plugins/akismet"
 fi
-if [ -f "/home/$USER/apps/$DOMAIN_NAME/$SUBFOLDER/wp-content/plugins/hello.php" ]; then
-  rm "/home/$USER/apps/$DOMAIN_NAME/$SUBFOLDER/wp-content/plugins/hello.php"
+if [ -f "wp-content/plugins/hello.php" ]; then
+  rm "wp-content/plugins/hello.php"
 fi
+
+popd
 
 echo -e "\nSite installed at ~/apps/$DOMAIN_NAME/$SUBFOLDER"
 
