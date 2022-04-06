@@ -50,6 +50,6 @@ if [ ! -d $CHILD_SITE_PATH ]; then
   exit
 fi
 
-sudo site $DOMAIN_NAME -subfolder=/$SUBFOLDER -delete=force
+sudo site $DOMAIN_NAME -subfolder="/$SUBFOLDER" -delete=force
 
 echo -e "\nSite deleted from $CHILD_SITE_PATH"
