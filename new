@@ -42,9 +42,7 @@ if [ -z "$SUBFOLDER" ]; then
 
   pushd "/home/$USER/apps/$DOMAIN_NAME/" &>/dev/null
 
-  wp rewrite structure '/%postname%'
-
-  # Remove default plugins - At this point the blank site is not installed
+  # Remove default plugins
   if [ -d "wp-content/plugins/akismet" ]; then
     rm -rf "/home/$USER/apps/$DOMAIN_NAME/wp-content/plugins/akismet"
   fi
@@ -52,23 +50,27 @@ if [ -z "$SUBFOLDER" ]; then
     rm "wp-content/plugins/hello.php"
   fi
 
-  popd
-
-  echo -e "\nSite installed at ~/apps/$DOMAIN_NAME"
-
   echo
   echo -n "Prepare HTTPS (Y/n)? "
   read answer
+
   if [ "$answer" != "${answer#[Nn]}" ] ;then
-
-    echo "Site URL: http://$DOMAIN_NAME"
-
-    exit # No
+    PROTOCOL=http
+  else
+    PROTOCOL=https
+    sudo site $DOMAIN_NAME -ssl=on
+    echo "HTTPS enabled"
   fi
 
-  sudo site $DOMAIN_NAME -ssl=on
+  SITE_URL=$PROTOCOL://$DOMAIN_NAME/
 
-  echo "Site URL: https://$DOMAIN_NAME"
+  wp core install --url=$SITE_URL --title="Site Title" --admin_user=admin --admin_password=admin --admin_email=admin@example.com
+  wp rewrite structure '/%postname%'
+
+  popd
+
+  echo -e "\nSite installed at ~/apps/$DOMAIN_NAME"
+  echo "Site URL: $SITE_URL"
 
   exit
 fi
@@ -99,9 +101,7 @@ sudo chmod -R g+rw /var/www/$DOMAIN_NAME/htdocs/$SUBFOLDER
 
 pushd "/home/$USER/apps/$DOMAIN_NAME/$SUBFOLDER/" &>/dev/null
 
-wp rewrite structure '/%postname%'
-
-# Remove default plugins - At this point the blank site is not installed
+# Remove default plugins
 if [ -d "wp-content/plugins/akismet" ]; then
   rm -rf "wp-content/plugins/akismet"
 fi
@@ -109,9 +109,15 @@ if [ -f "wp-content/plugins/hello.php" ]; then
   rm "wp-content/plugins/hello.php"
 fi
 
-popd
+PROTOCOL=http # TODO: If parent site has SSL already, PROTOCOL=https
 
-echo -e "\nSite installed at ~/apps/$DOMAIN_NAME/$SUBFOLDER"
+SITE_URL=$PROTOCOL://$DOMAIN_NAME/$SUBFOLDER/
 
-# If parent site has ssl
-# echo "Site URL: https://$DOMAIN_NAME"
+wp core install --url=$SITE_URL --title="Site Title" --admin_user=admin --admin_password=admin --admin_email=admin@example.com
+wp rewrite structure '/%postname%'
+
+popd &>/dev/null
+
+echo
+echo "Site folder is ~/apps/$DOMAIN_NAME/$SUBFOLDER"
+echo "Site URL is $SITE_URL"
