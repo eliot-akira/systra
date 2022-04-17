@@ -25,7 +25,18 @@ if [ ! -f ~/.bash_aliases ]; then
   mv $SCRIPTPATH ~/bin/systra
   ln -s ~/bin/systra/sys ~/bin/sys
 
-  sudo apt-get update
+  sudo apt update && sudo apt -y upgrade
+
+  sudo apt-get install fuse
+  sudo apt install snapd
+  sudo systemctl unmask snapd.service
+  sudo systemctl enable snapd.service
+  sudo systemctl start snapd.service
+
+  sudo apt install nano
+  sudo apt install git
+
+  # sudo apt-get update
   sudo apt install trash-cli
 
   echo -e "\nRun the following command: source ~/.profile && sys install\n"
