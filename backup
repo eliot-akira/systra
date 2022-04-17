@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+set -eou pipefail
+
+if [ -z ${1-} ]; then
+  echo -e "Backup a site\n\nUsage:\n"
+  echo "  backup [domain]           backup site"
+  echo "  backup [domain] [folder]  backup child site"
+  echo
+  exit
+fi
+
+SCRIPTPATH=$(dirname $(readlink -f "$0"))
+. $SCRIPTPATH/common
+
+ARCHIVE_PATH=~/archive
+
+DOMAIN_NAME=${1-}
+SUBFOLDER=${2-}
+
+if [ -z "$SUBFOLDER" ]; then
+
+  # echo "Backup site at $DOMAIN_NAME"
+
+  SITE_PATH=~/apps/$DOMAIN_NAME
+
+  TARGET_PATH="$ARCHIVE_PATH/$DOMAIN_NAME"
+  mkdir -p $TARGET_PATH
+
+  if [ ! -L $SITE_PATH ]; then
+    echo "Site folder not found: $SITE_PATH"
+    exit
+  fi
+
+  cd $SITE_PATH
+
+  echo "Backup from $SITE_PATH to $TARGET_PATH"
+  enter-when-ready
+
+  sudo -u www-data /home/$USER/bin/wp db export db.sql
+  sudo -u www-data rsync -aP --delete --exclude="wp-content/backups-dup-pro" --exclude="wp-snapshots" --exclude="sites" $SITE_PATH/ $TARGET_PATH
+  sudo -u www-data rm db.sql
+
+  echo -e "\nSite backup in $TARGET_PATH"
+  exit
+fi
+
+
+# Subfolder of existing site
+
+# echo "Backup child site at $DOMAIN_NAME/$SUBFOLDER"
+
+PARENT_SITE_PATH=~/apps/$DOMAIN_NAME
+
+if [ ! -L $PARENT_SITE_PATH ]; then
+  echo "Parent site folder not found: $PARENT_SITE_PATH"
+  exit
+fi
+
+CHILD_SITE_PATH=$PARENT_SITE_PATH/$SUBFOLDER
+
+if [ ! -d $CHILD_SITE_PATH ]; then
+  echo "Child site folder not found: $CHILD_SITE_PATH"
+  exit
+fi
+
+TARGET_PATH="$ARCHIVE_PATH/$DOMAIN_NAME/$SUBFOLDER"
+mkdir -p $TARGET_PATH
+
+cd $CHILD_SITE_PATH
+
+echo "Backup from $CHILD_SITE_PATH to $TARGET_PATH"
+enter-when-ready
+
+sudo -u www-data /home/$USER/bin/wp db export db.sql
+sudo -u www-data rsync -aP --delete --exclude="wp-content/backups-dup-pro" --exclude="wp-snapshots" $CHILD_SITE_PATH/ $TARGET_PATH
+sudo -u www-data rm db.sql
+
+echo -e "\nSite backup in $TARGET_PATH"
