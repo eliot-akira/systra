@@ -24,7 +24,7 @@ if [ -z "$SUBFOLDER" ]; then
   sudo site $DOMAIN_NAME -wp -force-redirect=root
 
   if [ ! -f "/var/www/$DOMAIN_NAME/wp-config.php" ]; then
-    # Error: Site was not created
+    echo "Error: Site config not found"
     exit
   fi
 

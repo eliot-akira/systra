@@ -1,0 +1,20 @@
+#!/bin/bash
+
+if [ -z $1 ]; then
+  echo -e "Delete certificate\n\nUsage:\n"
+  echo "  delete-cert [domain]  Delete certificate by domain name"
+  echo
+  echo "To see a list of certificates, run: sys list-cert"
+  echo
+  exit
+fi
+
+SCRIPTPATH=$(dirname $(readlink -f "$0"))
+. $SCRIPTPATH/common
+
+CERT_NAME=$1
+
+echo "Deleting certificate for $CERT_NAME"
+enter-when-ready
+
+sudo certbot delete --cert-name $CERT_NAME

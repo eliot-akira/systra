@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -eou pipefail
+
+if [ -z ${1-} ]; then
+  echo -e "Create a new static site\n\nUsage:\n"
+  echo "  new-static [domain]              Create new site"
+  echo
+  exit
+fi
+
+SCRIPTPATH=$(dirname $(readlink -f "$0"))
+. $SCRIPTPATH/common
+
+DOMAIN_NAME=$1
+SITE_FOLDER=/home/$USER/apps/$DOMAIN_NAME
+
+# Create folder
+
+if [ =d "$SITE_FOLDER" ]; then
+  echo "Site folder exists: $SITE_FOLDER"
+  exit
+else
+  mkdir -p "$SITE_FOLDER"
+fi
+
+# Copy NGINX config
+
+NGINX_CONFIG_TYPE=static-http
+SITE_NGINX_CONFIG=/etc/nginx/sites-available/$DOMAIN_NAME
+
+sudo cp $SCRIPTPATH/assets/nginx/$NGINX_CONFIG_TYPE $SITE_NGINX_CONFIG
+
+# Fill placeholders
+sudo sed -i "s/SERVER_USER/$USER/g" $SITE_NGINX_CONFIG
+sudo sed -i "s/SITE_FOLDER/$DOMAIN_NAME/g" $SITE_NGINX_CONFIG
+sudo sed -i "s/SITE_DOMAIN/$DOMAIN_NAME/g" $SITE_NGINX_CONFIG
+
+# Create symbolic link to enable
+sudo ln -s $SITE_NGINX_CONFIG /etc/nginx/sites-enabled/$DOMAIN_NAME &>/dev/null
+
+if [ ! -f "$SITE_FOLDER/index.html" ]; then
+  echo "OK from site folder" > $SITE_FOLDER/index.html
+fi
+
+# Optionally HTTPS

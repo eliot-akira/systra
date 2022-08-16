@@ -1,5 +1,5 @@
 
-export PATH="$PATH:~/.yarn/bin"
+#export PATH="$PATH:~/.yarn/bin"
 export PROMPT_COMMAND='echo -ne "\033]0;${USER}@${HOSTNAME%%.*}:${PWD/#$HOME/~}\007"' # Terminal window title
 
 unset MAILCHECK
@@ -101,7 +101,8 @@ alias clonel='function clonel(){ git clone --depth 1 --single-branch --branch ma
 
 # NGINX
 
-alias nginx-reload='sudo nginx -t && echo -n "Press enter if test passed - Otherwise press CTRL + C to stop.." && read && echo -e "\nRestarting NGINX.." && sudo service nginx reload'
+# Filter output of NGINX test - See https://webinoly.com/support/1541/fastcgiparams-nginx-t-warning
+alias nginx-reload='sudo nginx -t 2>&1 >/dev/null | grep -v "fastcgi_params_hash" && echo -n "Press enter if test passed - Otherwise press CTRL + C to stop.." && read && echo -e "\nRestarting NGINX.." && sudo service nginx reload'
 
 # WordPress
 

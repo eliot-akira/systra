@@ -3,4 +3,5 @@
 SCRIPTPATH=$(dirname $(readlink -f "$0"))
 . $SCRIPTPATH/common
 
-echo -e "Update system\n"
+echo "Updating systra"
+enter-when-ready

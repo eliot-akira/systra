@@ -7,6 +7,11 @@ SCRIPTPATH=$(dirname $(readlink -f "$0"))
 
 echo -e "Installing system features\n"
 
+if [[ $EUID -eq 0 ]]; then
+  echo "TODO: If run as root user, set up default user"
+  exit
+fi
+
 if [ ! -f ~/.bash_aliases ]; then
 
   echo -e "Set up shell environment"
@@ -27,6 +32,7 @@ if [ ! -f ~/.bash_aliases ]; then
 
   sudo apt update && sudo apt -y upgrade
 
+  # Snap required for webinoly
   sudo apt-get install fuse
   sudo apt install snapd
   sudo systemctl unmask snapd.service

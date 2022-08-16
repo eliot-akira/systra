@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -eou pipefail
+
+if [ -z ${1-} ]; then
+  echo -e "Create a new Node.js app\n\nUsage:\n"
+  echo "  new [domain]              Create new app"
+  echo
+  exit
+fi
+
+# Create folder
+
+# Create static site for HTTP

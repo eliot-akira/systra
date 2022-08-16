@@ -3,8 +3,22 @@
 alias www='sudo -u www-data'
 alias wp="sudo -u www-data /home/$USER/bin/wp"
 
-enter-when-ready() {
+function enter-when-ready() {
   echo -en "\nPress enter when ready, or CTRL + C to stop the script.."
   read
   echo
+}
+
+function reload-nginx() {
+
+  echo -e "\nTesting server config.."
+
+  # Filter output of NGINX test - See https://webinoly.com/support/1541/fastcgiparams-nginx-t-warning
+  sudo nginx -t 2>&1 >/dev/null | grep -v "fastcgi_params_hash"
+
+  echo -n "Press enter if test passed.."
+  read answer
+
+  echo -e "\nRestarting NGINX server.."
+  sudo service nginx reload
 }

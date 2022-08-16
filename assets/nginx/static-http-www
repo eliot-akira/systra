@@ -1,0 +1,21 @@
+server {
+  listen 80;
+  listen [::]:80;
+
+  server_name APP_DOMAIN;
+  root /home/SERVER_USER/apps/APP_FOLDER/;
+
+  index index.html;
+
+  location / {
+    try_files $uri $uri/ =404;
+  }
+}
+
+# Redirect www to non-www
+server {
+  listen 80;
+  listen [::]:80;
+  server_name www.APP_DOMAIN;
+  return 301 http://APP_DOMAIN$request_uri;
+}

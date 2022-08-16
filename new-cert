@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -eou pipefail
+
+if [ -z ${1-} ]; then
+  echo -e "Create a certificate for domain\n\nUsage:\n"
+  echo "  new-cert [domain]         Create new certificate"
+  echo
+  exit
+fi

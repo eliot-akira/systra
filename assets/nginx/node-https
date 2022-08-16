@@ -1,0 +1,32 @@
+server {
+
+  server_name cloud.tangible.one;
+
+  listen [::]:443 ssl; # managed by Certbot
+  listen 443 ssl; # managed by Certbot
+
+  ssl_certificate /etc/letsencrypt/live/cloud.tangible.one/fullchain.pem; # managed by Certbot
+  ssl_certificate_key /etc/letsencrypt/live/cloud.tangible.one/privkey.pem; # managed by Certbot
+
+  location / {
+    proxy_pass http://localhost:4001;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection 'upgrade';
+    proxy_set_header Host $host;
+    proxy_cache_bypass $http_upgrade;
+  }
+}
+
+server {
+  # HTTP -> HTTPS
+  if ($host = cloud.tangible.one) {
+      return 301 https://$host$request_uri;
+  } # managed by Certbot
+
+  listen 80;
+  listen [::]:80;
+
+  server_name cloud.tangible.one;
+  return 404; # managed by Certbot
+}
