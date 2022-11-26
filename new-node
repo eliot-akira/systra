@@ -3,7 +3,7 @@ set -eou pipefail
 
 if [ -z ${1-} ]; then
   echo -e "Create a new Node.js app\n\nUsage:\n"
-  echo "  new [domain]              Create new app"
+  echo "  new-node [domain]              Create new app"
   echo
   exit
 fi
