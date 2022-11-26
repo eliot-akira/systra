@@ -7,3 +7,53 @@ if [ -z ${1-} ]; then
   echo
   exit
 fi
+
+APP_DOMAIN=${1-}
+ROOT_DOMAIN=$(sed 's/.*\.\(.*\..*\)/\1/' <<< $APP_DOMAIN)
+
+if [ "$APP_DOMAIN" == "$ROOT_DOMAIN" ]; then WITH_WWW=true; else WITH_WWW=; fi
+
+if sudo test -f "/etc/letsencrypt/live/$APP_DOMAIN/fullchain.pem"; then
+  echo -e "Certificate already exits for $APP_DOMAIN\n"
+  echo -n "Regenerate certificates (y/n)? "
+  read answer
+  if [ "$answer" == "${answer#[Yy]}" ] ;then
+    exit
+  fi
+fi
+
+if [ -z "$WITH_WWW" ]; then
+  echo -e "\nGenerate test certificates for $APP_DOMAIN\n"
+  CERTBOT_OPTIONS="-d $APP_DOMAIN"
+else
+ echo -e "\nGenerate test certificates for $APP_DOMAIN and www.$APP_DOMAIN"
+ CERTBOT_OPTIONS="-d $APP_DOMAIN -d www.$APP_DOMAIN\n"
+fi
+
+WEBROOT_PATH="/home/$USER/apps/$APP_DOMAIN"
+
+if [ ! -d "$WEBROOT_PATH" ]; then
+  echo "App folder does not exist"
+  echo $WEBROOT_PATH
+  exit
+fi
+
+# Web strategy
+CERTBOT_OPTIONS="$CERTBOT_OPTIONS --webroot -w $WEBROOT_PATH"
+
+# NGINX strategy
+#CERTBOT_OPTIONS="$CERTBOT_OPTIONS --nginx"
+
+sudo certbot certonly --test-cert --dry-run $CERTBOT_OPTIONS
+
+
+echo -e "If that was not successful, press CTRL+C to stop the process\n"
+echo -n "Generate real certificates (y/n)? "
+read answer
+if [ "$answer" != "${answer#[Yy]}" ] ;then
+
+  sudo certbot certonly $CERTBOT_OPTIONS
+
+  # NGINX strategy
+  # sudo certbot --nginx certonly $CERTBOT_OPTIONS --force-renew
+fi

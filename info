@@ -12,25 +12,26 @@
 SCRIPTPATH=$(dirname $(readlink -f "$0"))
 . $SCRIPTPATH/common
 
-DOMAIN_NAME=$1
 
+# System
+
+DOMAIN_NAME=$1
 if [ -z "$DOMAIN_NAME" ]; then
   echo "System information"
   sudo webinoly -info
   exit
 fi
 
-SUBFOLDER=$2
+# Site
 
+SUBFOLDER=$2
 if [ -z "$SUBFOLDER" ]; then
   echo "Site information: $DOMAIN_NAME"
   sudo site $DOMAIN_NAME -info
   exit
 fi
 
-
-# Subfolder of existing site
+# Child site
 
 echo "Site information: $DOMAIN_NAME/$SUBFOLDER"
-
 sudo site $DOMAIN_NAME -subfolder=/$SUBFOLDER -info

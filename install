@@ -39,8 +39,11 @@ if [ ! -f ~/.bash_aliases ]; then
   sudo systemctl enable snapd.service
   sudo systemctl start snapd.service
 
-  sudo apt install nano
   sudo apt install git
+
+  # Terminal-based text editor 
+  sudo apt install nano
+  # curl https://getmic.ro | bash # https://github.com/zyedidia/micro
 
   # sudo apt-get update
   sudo apt install trash-cli
@@ -116,7 +119,7 @@ if [ ! -d /opt/webinoly ]; then
   # MariaDB >= 10.6 does not support character set "utf8" (must use utf8md3 or utf8md4), which breaks Duplicator packages from older servers
   sudo stack -mysql-ver=10.5
 
-  if [ -z "$PHP_VER" ]; then
+  if [ -z "${PHP_VER-}" ]; then
     # Default PHP version
     PHP_VER=7.4
   fi
