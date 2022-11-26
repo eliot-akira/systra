@@ -2,7 +2,7 @@
 
 Server management tool based on [Webinoly](https://github.com/QROkes/webinoly)
 
-- Requires: Ubuntu 20.04 or 18.04
+- Requires: Ubuntu 22.04 or 20.04
 - Includes: NGINX, MariaDB, PHP, Composer, Node.js, NPM, PM2
 
 ## Install
