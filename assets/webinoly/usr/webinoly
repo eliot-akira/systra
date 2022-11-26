@@ -2,12 +2,11 @@
 
 # Webinoly Server Manager Plugin
 # Syntax: webinoly <option> <argument>
-# Options: -update, -server-reset, -verify, -dbpass, -tools-port, -login-www-data, -cache-valid, -uninstall, -info, -external-sources-update, -clear-cache, -version, -blockip, -conf-value_, -default-site, -tools-site, -mysql-password, -smtp, -backup, -aws-s3-credentials, -db-import, -send-to-s3, -header-referrer, -header-hsts, -header-csp, -header-permissions-policy, -header-cache-control, -header-robots, -header-xfo, -header-xcto, -header-xssp, -custom-headers, -skip-cache, -skip-cookie-cache, -query-string-cache, -query-string-never-cache, -email, -external-db-save, -export, -import, -db-role-default, -mysql-public-access
-# Arguments: -raw, -profile, -list, -bucket, -source, -delete, -run, -restore, -wp, -destination, -date, -s3-european-buckets, info, -file, -add-db-pre, -no-recovery, -recalculate, -dbname, -skip-db, -filename, -overwrite
+# Options: -update, -server-reset, -verify, -dbpass, -tools-port, -login-www-data, -cache-valid, -uninstall, -info, -external-sources-update, -clear-cache, -version, -blockip, -dynvar, -default-site, -tools-site, -mysql-password, -smtp, -backup, -aws-s3-credentials, -db-import, -send-to-s3, -custom-headers, -skip-cache, -skip-cookie-cache, -query-string-cache, -query-string-never-cache, -email, -export, -import, -mysql-public-access
+# Arguments: -raw, -profile, -list, -bucket, -source, -delete, -run, -restore, -wp, -destination, -date, -s3-european-buckets, info, -file, -add-db-pre, -no-recovery, -recalculate, -dbname, -skip-db, -filename, -overwrite, -value
 
 source /opt/webinoly/lib/webin
 source /opt/webinoly/lib/datadog
-source /opt/webinoly/lib/headers
 source /opt/webinoly/lib/verify
 source /opt/webinoly/lib/bkp
 check_for_parameters $@
@@ -77,7 +76,7 @@ elif [[ -n $login_www_data ]]; then
 	nginx_not="true" # Nginx-Reload not-needed.
 	
 	
-elif [[ -n $cache_valid || -n $config_cache ]]; then
+elif [[ -n $cache_valid ]]; then
 	config_fastcgi_cache
 
 	
@@ -107,7 +106,7 @@ elif [[ -n $timezone ]]; then
 	if [[ $timezone == true ]]; then
 		echo "${blu}${bol}"
 		echo "Please, enter a valid Timezone for Ubuntu and PHP. ${end}"
-		echo "${blu}${dim}http://php.net/manual/en/timezones.php ${end}"
+		echo "${blu}${dim}https://www.php.net/manual/en/timezones.php ${end}"
 		echo ""
 		read -p "${blu}Timezone: ${end}" timezone
 		echo ""
@@ -133,12 +132,12 @@ elif [[ -n $blockip ]]; then
 	nginx_blockip
 
 
-elif [[ -n $conf_value ]]; then
-	if [[ -n $dyn_var && $dyn_var =~ ^[A-Za-z\-]+$ ]]; then
-		[[ $conf_value == "NeverMatchString" ]] && read -p "${blu}Enter a value for '${dyn_var}': ${end}" conf_value
-		if [[ -n $conf_value ]]; then
-			conf_write $dyn_var $conf_value
-			echo "${gre}Configuration successfully updated!${end}"
+elif [[ -n $dynvar ]]; then
+	if [[ -n $dynvar && $dynvar =~ ^[A-Za-z\-]+$ ]]; then
+		[[ -z $value ]] && read -p "${blu}Enter a value for '${dynvar}': ${end}" value
+		if [[ -n $value ]]; then
+			conf_write $dynvar "$value"
+			echo "${gre}Configuration successfully updated! ${dim}(${dynvar}:$(conf_read $dynvar))${end}" # Retrive the value to really be sure!
 		else
 			echo "${red}[ERROR] Please, enter a valid value!${end}"
 			exit 1
@@ -188,7 +187,7 @@ elif [[ -n $smtp ]]; then
 
 
 elif [[ -n $backup ]]; then
-	[[ $import =~ ^(true|stack|full)$ ]] || check_for_nginx_tool_bkp -ask
+	[[ $import =~ ^(true|stack|full)$ || $backup == "local" ]] || check_for_nginx_tool_bkp -ask
 	
 	if [[ -n $list && -z $add_db_pre ]]; then
 		bkp_s3_list
@@ -276,24 +275,6 @@ elif [[ -n $info ]]; then
 	nginx_not="true" # Nginx-Reload not-needed.
 
 
-elif [[ -n $header_referrer ]]; then
-	http_header_referrer
-elif [[ -n $header_hsts ]]; then
-	http_header_hsts
-elif [[ -n $header_csp ]]; then
-	http_header_csp
-elif [[ -n $header_permissions_policy ]]; then
-	http_header_permissions_policy
-elif [[ -n $header_cache_control ]]; then
-	http_header_cache_control
-elif [[ -n $header_robots ]]; then
-	http_header_robots
-elif [[ -n $header_xfo ]]; then
-	http_header_xfo
-elif [[ -n $header_xcto ]]; then
-	http_header_xcto
-elif [[ -n $header_xssp ]]; then
-	http_header_xssp
 elif [[ -n $custom_headers ]]; then
 	http_header_custom
 
@@ -305,18 +286,6 @@ elif [[ -n $query_string_cache || -n $query_string_never_cache || -n $skip_cache
 
 elif [[ -n $email ]]; then
 	email_update
-	nginx_not="true" # Nginx-Reload not-needed.
-	
-	
-elif [[ -n $external_db_save ]]; then
-	ext_db_save
-	nginx_not="true" # Nginx-Reload not-needed.
-	
-
-elif [[ -n $db_role_default ]]; then
-	db_role_check $db_role_default
-	conf_write dbrole $db_role_default
-	echo "${gre}Default role for Database creation has been set to '${db_role_default}' successfully! ${end}"
 	nginx_not="true" # Nginx-Reload not-needed.
 	
 	

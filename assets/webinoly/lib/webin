@@ -74,11 +74,17 @@ system_info() {
 	echo "${blu}${bol}[MYSQL]${end}"
 	if [[ $(conf_read mysql) == "true" ]]; then
 		
-		[[ $(conf_read mysql-tool-pma) == "true" ]] && local pmaver=$(grep -E "public const VERSION = '[0-9\.]+'.*;" /var/www/$(conf_read tools-port)/htdocs/pma/libraries/classes/Version.php | cut -f 2 -d "'") || local pmaver="Not installed!"
+		# Check if file exist because in legacy it doesn't!
+		if [[ $(conf_read mysql-tool-pma) == "true" && -f /var/www/$(conf_read tools-port)/htdocs/pma/libraries/classes/Version.php ]]; then
+			local pmaver=$(grep -E "public const VERSION = '[0-9\.]+'.*;" /var/www/$(conf_read tools-port)/htdocs/pma/libraries/classes/Version.php | cut -f 2 -d "'")
 		
 		# Legacy support: before v5.1.0 (Feb 23, 2021) version is found here:
-		[[ $(conf_read mysql-tool-pma) == "true" && -z $pmaver ]] && local pmaver=$(grep -e "\$this->set('PMA_VERSION',.*'[0-9\.]*');" /var/www/$(conf_read tools-port)/htdocs/pma/libraries/classes/Config.php | cut -f 4 -d "'")
-
+		elif [[ $(conf_read mysql-tool-pma) == "true" ]]; then
+			local pmaver=$(grep -e "\$this->set('PMA_VERSION',.*'[0-9\.]*');" /var/www/$(conf_read tools-port)/htdocs/pma/libraries/classes/Config.php | cut -f 4 -d "'")
+		
+		elif [[ $(conf_read mysql-tool-pma) != "true" ]]; then
+			local pmaver="Not installed!"
+		fi
 		
 		echo "${blu}Info:${end}${dim} $(sudo mysql --version) ${end}"
 		echo "${blu}phpMyAdmin:${end}${dim} $pmaver ${end}"
@@ -210,6 +216,11 @@ smtp_setup() {
 
 
 mysql_change_password() {
+	if ! sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS -e "quit" 2>/dev/null; then
+		echo "${red}[ERROR] MySQL Connection to localhost failed! ${dim}(admin)${end}"
+		exit 1
+	fi
+	
 	if [[ $mysql_password == true ]]; then
 		echo ""
 		read -p "${blu}MySQL User: ${end}" user
@@ -234,10 +245,13 @@ mysql_change_password() {
 			exit 1
 	fi
 	
-	sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS -e "ALTER USER '${user}'@'localhost' IDENTIFIED BY '${pass}';FLUSH PRIVILEGES;"
+	# First get the User host: 'localhost' or '%'
+	local userhost=$(sudo mysql -ss --connect-timeout=10 --user=admin -p$ADMIN_PASS -e "SELECT Host FROM mysql.user WHERE User='${user}' LIMIT 1;")
+	
+	sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS -e "ALTER USER '${user}'@'${userhost}' IDENTIFIED BY '${pass}';FLUSH PRIVILEGES;"
 	if [[ $? == 0 ]]; then
 		[[ $user =~ ^(root|admin)$ ]] && conf_write mysql-${user} $( echo $pass | openssl enc -a -salt )
-		echo "${gre}MySQL Password successfully changed!${end}"
+		echo "${gre}MySQL Password successfully changed! ${dim}('${user}'@'${userhost}')${end}"
 	else
 		echo "${red}[ERROR] Unexpected error!${end}"
 		exit 1
@@ -280,6 +294,8 @@ mysql_public_access() {
 			read -p "${blu}Master User Password: ${end}" pass
 		fi
 		
+		[[ ${pass,,} == "random" ]] && local pass=`pwgen -s -1 16`
+		
 		if [[ -z $user || -z $pass || $user == *"'"* || $pass == *"'"* || ${#pass} -lt 8 ]]; then
 			echo "${red}[ERROR] Please, enter a valid username and password!"
 			echo "Password can not contain a 'single quote' and must be at least 8 characters long.${end}"
@@ -299,7 +315,7 @@ GRANT ${priv} ON *.* TO '${user}'@'%' ${grant};
 FLUSH PRIVILEGES;
 _EOF_
 
-			[[ $? == 0 ]] && echo "${gre}${dim}Master User${blu} '${user}' ${gre}successfully created!${end}" || echo "${red}[ERROR] Unexpected error!${end}"
+			[[ $? == 0 ]] && echo "${gre}${dim}Master User${blu} $user ${gre}with password ${blu}${pass}${gre} successfully created!${end}" || echo "${red}[ERROR] Unexpected error!${end}"
 		fi
 	
 	fi
@@ -358,7 +374,8 @@ webinoly_update() {
 	if [[ $? == 0 ]]; then
 		echo "${gre}Webinoly App has been updated successfully!${dim} (Updated to: v$(conf_read app-version))${end}"
 	else
-		sudo rm weby
+		# Check if exist, because it can be deleted before if an error is triggered in the installer, for instance.
+		[[ -f weby ]] && sudo rm weby
 		echo "${red}[ERROR] Update process has failed!${end}"
 		exit 1
 	fi
@@ -375,18 +392,19 @@ wp_package_update() {
 
 
 fix_permissions() {
-	sudo find /var/www ! -path "/var/www/\.*" -type d -exec chmod 755 {} \;
-	sudo find /var/www ! -path "/var/www/\.*" -type f -exec chmod 644 {} \;
+	# https://github.com/QROkes/webinoly/issues/49
+	sudo find /var/www ! -path "/var/www/\.*" -type d -print0 | sudo xargs -r -0 chmod 755
+	sudo find /var/www ! -path "/var/www/\.*" -type f -print0 | sudo xargs -r -0 chmod 644
 	
 	if [[ -d /var/www/.ssh ]]; then
-		sudo find /var/www/.ssh -type d -exec chmod 700 {} \;
-		sudo find /var/www/.ssh ! -path "/var/www/.ssh/*.pub" -type f -exec chmod 600 {} \;
-		sudo find /var/www/.ssh -path "/var/www/.ssh/*.pub" -type f -exec chmod 644 {} \;
+		sudo find /var/www/.ssh -type d -print0 | sudo xargs -r -0 chmod 700
+		sudo find /var/www/.ssh ! -path "/var/www/.ssh/*.pub" -type f -print0 | sudo xargs -r -0 chmod 600
+		sudo find /var/www/.ssh -path "/var/www/.ssh/*.pub" -type f -print0 | sudo xargs -r -0 chmod 644
 	fi
 	if [[ -d $CURRENT_HOME/.ssh ]]; then
-		sudo find $CURRENT_HOME/.ssh -type d -exec chmod 700 {} \;
-		sudo find $CURRENT_HOME/.ssh ! -path "$CURRENT_HOME/.ssh/*.pub" -type f -exec chmod 600 {} \;
-		sudo find $CURRENT_HOME/.ssh -path "$CURRENT_HOME/.ssh/*.pub" -type f -exec chmod 644 {} \;
+		sudo find $CURRENT_HOME/.ssh -type d -print0 | sudo xargs -r -0 chmod 700
+		sudo find $CURRENT_HOME/.ssh ! -path "$CURRENT_HOME/.ssh/*.pub" -type f -print0 | sudo xargs -r -0 chmod 600
+		sudo find $CURRENT_HOME/.ssh -path "$CURRENT_HOME/.ssh/*.pub" -type f -print0 | sudo xargs -r -0 chmod 644
 		sudo chown -R ${CURRENT_USER}:${CURRENT_USER} $CURRENT_HOME/.ssh
 	fi
 	
@@ -463,7 +481,7 @@ server_reset() {
 show_db_data() {
 	if [[ -n $(conf_read external-dbu) && -n $(conf_read external-dbp) ]]; then
 		local extu=$(conf_read external-dbu)
-		local extp=$( echo $(conf_read external-dbp) | openssl enc -d -a -salt )
+		local extp=$(conf_read external-dbp)
 		
 		if [[ -n $(conf_read external-dbh) && -n $(conf_read external-dbx) ]]; then
 			local exth="$(conf_read external-dbh):$(conf_read external-dbx)"
@@ -535,6 +553,7 @@ change_tools_port() {
 		fi
 		
 		conf_write tools-port $port
+		conf_write tools-port-set $port
 		echo "${gre}Port${blu} $port ${gre}has been enabled to access all your Tools! ${end}"
 	else
 		echo "${red}[ERROR] Please, enter a valid port number (1-65535)!${end}"
@@ -663,6 +682,7 @@ Match Group sftponly
 		[[ -n $falus ]] && sudo sed -i "s/$falus/$falus www-data/" /etc/ssh/sshd_config
 
 		conf_write login-www-data true
+		conf_write sftp-www-data true
 		sudo systemctl restart ssh
 		echo "${gre}SFTP access for www-data user has been successfuly enabled! ${end}"
 	
@@ -683,6 +703,7 @@ Match Group sftponly
 		fi
 
 		conf_write login-www-data purged
+		conf_write sftp-www-data purged
 		sudo systemctl restart ssh
 		echo "${gre}SFTP access for www-data user has been successfuly disabled! ${end}"
 	else
@@ -903,6 +924,7 @@ set_default_nginx_response() {
 			sudo cat /opt/webinoly/templates/source/default >| /etc/nginx/sites-available/default
 			remove_domain_default_site
 			conf_write default-site default
+			conf_write default-response default
 			echo "${gre}Default Nginx was successfully assigned as default site!${end}"
 		else
 			echo "${red}[ERROR] Nginx Default file backup not found! ${end}"
@@ -913,6 +935,7 @@ set_default_nginx_response() {
 		remove_domain_default_site
 		create_blackhole_cert
 		conf_write default-site blackhole
+		conf_write default-response blackhole
 		echo "${gre}Blackhole Nginx site was successfully assigned as default site!${end}"
 	else
 		# Domain option
@@ -935,6 +958,7 @@ set_default_nginx_response() {
 			
 			sudo rm -rf /etc/nginx/sites-enabled/default
 			conf_write default-site $default_site
+			conf_write default-response $default_site
 			echo "${gre}Site${blu} ${default_site} ${gre}was successfully assigned as default site!${end}"
 		else
 			[[ -f /etc/nginx/sites-available/$default_site ]] && echo "${red}Site found but is disabled.${end}"
@@ -1017,55 +1041,53 @@ database_import() {
 }
 
 
-ext_db_save() {
-	if [[ $external_db_save == "purge" || -n $purge ]]; then
-		conf_delete external-dbu -commented
-		conf_delete external-dbp -commented
-		conf_delete external-dbh -commented
-		conf_delete external-dbx -commented
-		echo "${gre}External DB data successfully removed!${end}"
+http_header_custom() {
+	if ! [[ $custom_headers =~ ^(reload|remove)$ ]]; then
+		echo "${red}[ERROR] Please, enter a valid option Custom Headers!${end}"
+		exit 1
+	fi
+	
+	if [[ $(conf_read nginx) == "true" ]]; then
+		sudo sed -i '/WebinolyCustomHeaders/,/WebinolyCustomHeadersEnd/{/.*/d}' /etc/nginx/common/headers-http.conf
+		sudo sed -i '/WebinolyCustomHeaders/,/WebinolyCustomHeadersEnd/{/.*/d}' /etc/nginx/common/headers-https.conf
+		sudo sed -i '/WebinolyCustomHeaders/,/WebinolyCustomHeadersEnd/{/.*/d}' /etc/nginx/common/headers-html.conf
+	fi
+	
+	if [[ $custom_headers == "reload" && $(conf_read nginx) == "true" ]]; then
+		if [[ -s /opt/webinoly/templates/source/custom_header_http_webinoly.data ]]; then
+			local http="$(sudo grep -E "^add_header .*;$" /opt/webinoly/templates/source/custom_header_http_webinoly.data)"
+			if [[ -n $http ]]; then
+				echo "# WebinolyCustomHeaders
+$http
+# WebinolyCustomHeadersEnd" >> /etc/nginx/common/headers-http.conf
+			fi
+		fi
+		
+		if [[ -s /opt/webinoly/templates/source/custom_header_https_webinoly.data ]]; then
+			local https="$(sudo grep -E "^add_header .*;$" /opt/webinoly/templates/source/custom_header_https_webinoly.data)"
+			if [[ -n $https ]]; then
+				echo "# WebinolyCustomHeaders
+$https
+# WebinolyCustomHeadersEnd" >> /etc/nginx/common/headers-https.conf
+			fi
+		fi
+		
+		if [[ -s /opt/webinoly/templates/source/custom_header_html_webinoly.data ]]; then
+			local html="$(sudo grep -E "^add_header .*;$" /opt/webinoly/templates/source/custom_header_html_webinoly.data)"
+			if [[ -n $html ]]; then
+				echo "# WebinolyCustomHeaders
+$html
+# WebinolyCustomHeadersEnd" >> /etc/nginx/common/headers-html.conf
+			fi
+		fi
+		
+		conf_write header-custom true
+		echo "${gre}Custom Headers successfully configured!${end}"
+	elif [[ $custom_headers == "reload" ]]; then
+		conf_write header-custom true
+		echo "${gre}Custom Headers successfully configured and it will be used next time NGINX is installed!${end}"
 	else
-		if [[ $external_db_save == "true" ]]; then
-			read -p "${blu} Host: ${end}" host
-			read -p "${blu} User: ${end}" user
-			read -p "${blu} Password: ${end}" pass
-			
-			if [[ -z $host || -z $user || -z $pass || $user =~ [:]+ || $pass =~ [:]+ ]]; then
-				echo "${red}[ERROR] Invalid data for External Database!${end}"
-				exit 1
-			fi
-		else
-			# Prevent errors
-			if [[ ${#external_db_save} -lt 2 ]]; then
-				echo "${red}[ERROR] Invalid data for External Database!${end}"
-				exit 1
-			fi
-			
-			local dbdata=${external_db_save:1:-1}
-			local user=$(echo "${dbdata}" | cut -d',' -f 1 -s)
-			local pass=$(echo "${dbdata}" | cut -d',' -f 2 -s)
-			local host=$(echo "${dbdata}" | cut -d',' -f 3 -s)
-			
-			if [[ $(echo "${external_db_save}" | cut -c-1) != "[" || $(echo "${external_db_save}" | rev | cut -c-1) != "]" || -z $host || -z $user || -z $pass || $user =~ [:]+ || $pass =~ [:]+ ]]; then
-				echo "${red}[ERROR] Invalid data for External Database!${end}"
-				exit 1
-			fi
-		fi
-		
-		
-		is_url $host -split
-		if [[ -z $url_path && $(is_url $host) =~ ^(http|https|ip|true)$ && -n $url_host && -n $url_port ]]; then
-			conf_write external-dbh $url_host
-			conf_write external-dbx $url_port
-		else
-			echo "${red}[ERROR] Invalid database host/port!${end}"
-			exit 1
-		fi
-		
-		conf_write external-dbu $user
-		conf_write external-dbp $( echo $pass | openssl enc -a -salt )
-		
-		echo "${gre}External DB data successfully saved!${end}"
+		conf_write header-custom false
+		echo "${gre}Custom Headers successfully removed!${end}"
 	fi
 }
-

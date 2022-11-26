@@ -11,6 +11,7 @@ ssl_nginx() {
 	
 	# Headers
 	sudo sed -i '/header.conf;/c \	include common/headers.conf;' /etc/nginx/sites-available/$domain
+	sudo sed -i '/headers-http.conf/a \	include common/headers-https.conf;' /etc/nginx/sites-available/$domain # In case of Force-Redirect!
 	[[ -f /etc/nginx/sites-available/$(conf_read tools-port) ]] && sudo sed -i '/header.conf;/c \	include common/headers.conf;' /etc/nginx/sites-available/$(conf_read tools-port)
 	for pxy in "/etc/nginx/apps.d/${domain}"*-proxy.conf
 	do
@@ -31,6 +32,15 @@ ssl_nginx() {
 		sudo chmod 755 $(dirname -- $ssl_crt)
 		sudo chmod 755 $(dirname -- $ssl_key)
 		sudo chown -R root:root $(dirname -- $ssl_crt)
+		
+		# Not duplicate: Custom cert function does not run the same way as LE requests.
+		# For some unknown reason this condition doesn't work in oneline as we usually do!
+		if [[ $(is_force_redirect $domain) == "www" ]]; then
+			wp_db_update $domain "https://www.${domain}"
+		else
+			wp_db_update $domain "https://${domain}"
+		fi
+		
 		if [[ -n $ssl_ocsp && -f $ssl_ocsp ]]; then
 			sudo sed -i "/ssl_trusted_certificate/c \	ssl_trusted_certificate $ssl_ocsp;" /etc/nginx/sites-available/$domain
 			sudo chmod 777 $ssl_ocsp
@@ -166,7 +176,12 @@ site_ssl_on() {
 		[[ -z $cronmail && -n $cermail && -z $cronrene ]] && echo "MAILTO=${cermail}" | sudo tee -a /var/spool/cron/crontabs/root > /dev/null
 		[[ -z $cronrene ]] && echo '15 3 * * 7 certbot renew --post-hook "service nginx restart"' | sudo tee -a /var/spool/cron/crontabs/root > /dev/null
 
-		[[ $(is_wp $domain) == "true" ]] && edit_wp_db_url $domain "https://${domain}"
+		# For some unknown reason this condition doesn't work in oneline as we usually do!
+		if [[ $(is_force_redirect $domain) == "www" ]]; then
+			wp_db_update $domain "https://www.${domain}"
+		else
+			wp_db_update $domain "https://${domain}"
+		fi
 		
 		echo "${gre}SSL have been successfully enabled for your site${blu} $domain${end}"
 	elif [[ -f /etc/letsencrypt/live/$domain/fullchain.pem && $ssl == "force-renewal" ]]; then
@@ -191,7 +206,7 @@ ssl_revoke() {
 	else
 		echo "${red}[ERROR] Cert cannot be revoked!${dim} (A common cause is that expired certs cannot be revoked)${end}"
 		
-		if [[ $revoke == "force" ]]; then
+		if [[ ${revoke,,} == "force" ]]; then
 			ans="Y"
 		else
 			echo "${blu}Do you want to delete this cert [y/N]? ${end}"
@@ -224,6 +239,7 @@ site_ssl_off() {
 	
 	# Headers
 	sudo sed -i '/headers.conf;/c \	include common/header.conf;' /etc/nginx/sites-available/$domain
+	sudo sed -i '/WebinolyWWWredirectStart/,/WebinolyWWWredirectEnd/{/headers-https.conf;/d}' /etc/nginx/sites-available/$domain # In case of Force-Redirect
 	[[ -f /etc/nginx/sites-available/$(conf_read tools-port) ]] && sudo sed -i '/headers.conf;/c \	include common/header.conf;' /etc/nginx/sites-available/$(conf_read tools-port)
 	for pxy in "/etc/nginx/apps.d/${domain}"*-proxy.conf
 	do
@@ -242,7 +258,8 @@ site_ssl_off() {
 		echo "${gre}${dim}Tools Site updated with SSL!${end}"
 	fi
 	
-	[[ -z $no_db_update && $(is_wp $domain) == "true" ]] && edit_wp_db_url $domain "http://${domain}"
+	[[ -z $no_db_update && $(is_force_redirect $domain) != "www" ]] && wp_db_update $domain "http://${domain}"
+	[[ -z $no_db_update && $(is_force_redirect $domain) == "www" ]] && wp_db_update $domain "http://www.${domain}"
 	
 	# Check if exist to not try to revoke a cert that don't exist, for example a site with a cert added to a wildcard! (-add-to-wildcard)
 	if [[ -f /etc/letsencrypt/renewal/${domain}.conf ]]; then

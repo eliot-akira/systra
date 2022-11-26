@@ -1,5 +1,6 @@
 #!/bin/bash
 source /opt/webinoly/lib/general
+source /opt/webinoly/lib/headers
 
 readonly cores=$(grep ^processor /proc/cpuinfo | wc -l)
 readonly swapm=$(($(grep SwapTotal /proc/meminfo | cut -f 2 -d ':' | tr -d ' ' | cut -f 1 -d 'k')/1024))
@@ -201,9 +202,6 @@ mysql_install() {
 	
 	# debconf-utils for unattended scripts
 	# debconf-get-selections | grep phpmyadmin   <<-- list conf variables
-
-	sudo apt -y -qq install apt-transport-https
-	sudo apt -y -qq install dirmngr
 		
 	# Generate mysql user passwords
 	if [[ -z $(conf_read mysql-root) && -z $(conf_read mysql-admin) ]]; then
@@ -224,7 +222,7 @@ mysql_install() {
 	local ver=$(conf_read mysql-ver)
 	echo "mariadb-server-${ver} mysql-server/root_password password $AUTOGENPASS_ROOT" | debconf-set-selections
 	echo "mariadb-server-${ver} mysql-server/root_password_again password $AUTOGENPASS_ROOT" | debconf-set-selections
-	sudo apt -y install mariadb-server
+	sudo apt -y install apt-transport-https dirmngr mariadb-server
 	
 	conf_write mysql true
 	
@@ -325,16 +323,15 @@ fastcgi_param  HTTP_ACCEPT_ENCODING "";
 	[[ $(conf_read sftp-www-data) == "true" ]] && sudo webinoly -login-www-data=on
 	[[ $(conf_read sftp-www-data) == "false" ]] && sudo webinoly -login-www-data=off
 	
-	[[ -n $(conf_read header-referrer) ]] && sudo webinoly -header-referrer=$(conf_read header-referrer)
-	[[ -n $(conf_read header-hsts) ]] && sudo webinoly -header-hsts=$(conf_read header-hsts)
-	[[ -n $(conf_read header-cache-control) ]] && sudo webinoly -header-cache-control=on
-	[[ -n $(conf_read header-csp) ]] && sudo webinoly -header-csp=on
-	[[ -n $(conf_read header-permissions) ]] && sudo webinoly -header-permissions-policy=on
-	[[ -n $(conf_read header-robots) ]] && sudo webinoly -header-robots=on
-	[[ $(conf_read header-xssp) == "false" ]] && sudo webinoly -header-xssp=off
-	[[ $(conf_read header-xcto) == "false" ]] && sudo webinoly -header-xcto=off
-	[[ $(conf_read header-xfo) == "allow-from" && -n $(conf_read header-xfo-url) ]] && sudo webinoly -header-xfo=allow-from -url=$(conf_read header-xfo-url)
-	[[ $(conf_read header-xfo) =~ ^(off|deny|sameorigin)$ ]] && sudo webinoly -header-xfo=$(conf_read header-xfo)
+	http_header_referrer
+	http_header_hsts
+	http_header_cache_control
+	http_header_csp
+	http_header_permissions_policy
+	http_header_robots
+	http_header_xssp
+	http_header_xcto
+	http_header_xfo
 	[[ $(conf_read header-custom) == "true" ]] && sudo webinoly -custom-headers=reload
 	
 	if [[ $(conf_read xmlrpc) =~ ^(blocked|limited|open)$ ]]; then
@@ -371,6 +368,7 @@ location = /xmlrpc.php {
 	
 	conf_write server-version $svr_version
 	conf_write nginx-optim true
+	sudo systemctl reload nginx
 	api-events_update in10
 	echo "${gre}Nginx has been successfully Optimized by Webinoly! ${end}"
 }
@@ -524,9 +522,21 @@ nginx_tool_bkp() {
 	
 	# Instalar Duply & Duplicity with S3 support
 	# Now there is an Official PPA: https://launchpad.net/~duplicity-team/+archive/ubuntu/duplicity-release-git
-	# We use snap because PPA has no support for ARM architecture.
-	sudo snap install --classic duplicity
-	sudo apt -y install python3-boto3
+	# We removed SNAP because they removed ARM support, also they are having a lot of issues, they are mentioned they are considering removing snap support.
+	# https://gitlab.com/duplicity/duplicity/-/issues
+	
+	# Minimum required, most of them are already installed by default, but we need to be sure: https://gitlab.com/duplicity/duplicity/-/blob/master/debian/control
+	# Also needed: python3-pip
+	# Backend for S3: python3-boto3
+	sudo apt install -y debhelper dh-python python3 gnupg librsync-dev par2 pep8 pylint python3-pytest python3-pytest-cov python3-pytest-runner python3-dev python3-fasteners python3-future python3-mock python3-pexpect python3-setuptools python3-setuptools-scm rdiff rename rsync python3-pip python3-boto3
+	
+	# Duplicity installation directly from source
+	# Temporal fix to remove warning - wait for: https://github.com/pypa/pip/issues/10556 - remove from stack purge too!
+	sudo pip3 install duplicity 2>&1 | grep -v "pip as the 'root' user"
+	
+	# Temporal dynvar - in the next stack update we will update all the old snap installations
+	# Be sure to remove it from "stack" command too.
+	conf_write bkp-source-tmp true
 	
 	# https://sourceforge.net/projects/ftplicity/files/duply%20%28simple%20duplicity%29/
 	sudo cp /opt/webinoly/templates/general/duply /usr/bin/
@@ -609,7 +619,7 @@ mysql_tool_pma() {
 		sudo cp /var/www/$(conf_read tools-port)/htdocs/pma/config.sample.inc.php /var/www/$(conf_read tools-port)/htdocs/pma/config.inc.php
 		sudo sed -i "/blowfish_secret/c \$cfg['blowfish_secret'] = '$(pwgen -s -1 32)';" /var/www/$(conf_read tools-port)/htdocs/pma/config.inc.php
 		sudo chown -R www-data:www-data /var/www/$(conf_read tools-port)/htdocs/pma
-		sudo find /var/www/$(conf_read tools-port)/htdocs/pma -type f -exec chmod 644 {} \;
+		sudo find /var/www/$(conf_read tools-port)/htdocs/pma -type f -print0 | sudo xargs -r -0 chmod 644
 		
 		conf_write mysql-tool-pma true
 		echo "${gre}phpMyAdmin has been installed successfully! ${end}"
@@ -629,6 +639,8 @@ set_timezone() {
 			# Don't reload if running inside php-optim process.
 			[[ $(conf_read status-api) != "ip3" ]] && sudo systemctl reload php$(conf_read php-ver)-fpm
 		fi
+		
+		sudo systemctl restart cron
 		echo "${gre}Timezone has been successfully set!${dim} ($(conf_read timezone)) ${end}"
 	else
 		echo "${red}Timezone not found or not valid!${end}"
@@ -696,6 +708,15 @@ swap_create() {
 			local newswap="0"
 		fi
 
+		# Check if disk available space is enough!
+		local avail=$(df -hBG --output=avail / | grep -Eo "[0-9]+" | head -n 1)
+		if [[ -n $avail && -n $newswap && $(($newswap+1)) -ge $avail ]]; then
+			echo "${red}[ERROR] No disk space available for SWAP!${dim} (Needed: ${newswap}Gb Available: ${avail}Gb ) ${end}"
+			local newswap="0"
+		else
+			echo "${blu}${dim}Swap size: ${newswap}Gb (Available: ${avail}Gb) ${end}"
+		fi
+		
 		if [[ -z $newswap || $newswap == 0 ]]; then
 			echo "${red}[ERROR] Webinoly could not create a new SWAP file! ${end}"
 		else
@@ -763,6 +784,12 @@ stack_builder() {
 	# Example: stack_builder false false mysql-client
 	# Example: stack_builder <empty> - just update and install pre-packs
 	
+	# Prevent asking for restaring services when installing packages.
+	if [[ -f /etc/needrestart/needrestart.conf && ! -f /etc/needrestart/conf.d/webinoly.conf ]]; then
+		sudo touch /etc/needrestart/conf.d/webinoly.conf
+		echo "\$nrconf{restart} = 'a';" >> /etc/needrestart/conf.d/webinoly.conf
+	fi
+	
 	# Backups can be installed alone...
 	[[ $4 == "letsencrypt" || $4 == "pma" ]] && check_for_nginx -ask
 	[[ $4 == "postfix" || $4 == "redis" || $4 == "memcached" || $4 == "pma" ]] && check_for_php -ask
@@ -779,17 +806,10 @@ stack_builder() {
 		api-events_update i1
 		sudo apt -qq update
 		
-		# Usually comes by default with Ubuntu. Ensure we have it always!
-		sudo apt -y -qq install software-properties-common
-		sudo apt -y -qq install debconf-utils
-		sudo apt -y -qq install zip
-		
-		# Webinoly tools
-		sudo apt -y -qq install pwgen
-		sudo apt -y -qq install unzip
-		
-		# Fix issue installing in some Digital Ocean droplets
-		sudo apt -y -qq install dialog
+		# Usually comes by default with Ubuntu. Ensure we have it always! (software-properties-common debconf-utils zip)
+		# Webinoly tools (pwgen unzip)
+		# Fix issue installing in some Digital Ocean droplets (dialog)
+		sudo apt -y -qq install software-properties-common debconf-utils zip pwgen unzip dialog
 		
 		# Snap is installed by default since 16.04, but better be sure!
 		sudo snap install core
@@ -801,11 +821,24 @@ stack_builder() {
 	
 	# PPA's
 	if [[ $1 == "nginx" && $(conf_read nginx) != "true" ]]; then
-		sudo apt-key adv --fetch-keys 'https://nginx.org/keys/nginx_signing.key'
-		if [[ $(conf_read nginx-ppa) == "mainline" ]]; then
-			sudo add-apt-repository "deb https://nginx.org/packages/mainline/ubuntu/ $(check_osname) nginx"
+		[[ $nginx =~ ^(stable|mainline)$ ]] && conf_write nginx-ppa $nginx
+		[[ $lemp =~ ^(stable|mainline)$ ]] && conf_write nginx-ppa $lemp
+		
+		if [[ $(lsb_release -c | cut -d':' -f 2 | xargs) =~ ^(bionic|focal)$ ]]; then
+			sudo apt-key adv --fetch-keys 'https://nginx.org/keys/nginx_signing.key'
+			if [[ $(conf_read nginx-ppa) == "mainline" ]]; then
+				echo | sudo add-apt-repository "deb https://nginx.org/packages/mainline/ubuntu/ $(check_osname) nginx"
+			else
+				echo | sudo add-apt-repository "deb https://nginx.org/packages/ubuntu/ $(check_osname) nginx"
+			fi
 		else
-			sudo add-apt-repository "deb https://nginx.org/packages/ubuntu/ $(check_osname) nginx"
+			[[ ! -s /usr/share/keyrings/nginx-archive-keyring.gpg ]] && sudo rm -rf /usr/share/keyrings/nginx-archive-keyring.gpg # Prevent issues!
+			[[ ! -f /usr/share/keyrings/nginx-archive-keyring.gpg ]] && wget -nv -O- https://nginx.org/keys/nginx_signing.key | sudo gpg --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg
+			if [[ $(conf_read nginx-ppa) == "mainline" ]]; then
+				echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] https://nginx.org/packages/mainline/ubuntu/ $(lsb_release -cs) nginx" | sudo tee /etc/apt/sources.list.d/nginx.list
+			else
+				echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] https://nginx.org/packages/ubuntu/ $(lsb_release -cs) nginx" | sudo tee /etc/apt/sources.list.d/nginx.list
+			fi
 		fi
 		local code="run"
 	elif [[ $1 == "nginx" ]]; then
@@ -814,27 +847,53 @@ stack_builder() {
 	fi
 	
 	if [[ $2 == "php" && $(conf_read php) != "true" ]]; then
-		# Fix ondrej issue - https://github.com/oerdnj/deb.sury.org/issues/56
-		#sudo apt install -y language-pack-en-base
-		sudo LC_ALL=C.UTF-8 add-apt-repository -y ppa:ondrej/php
+		if [[ $(lsb_release -c | cut -d':' -f 2 | xargs) =~ ^(bionic|focal)$ ]]; then
+			# Fix ondrej issue - https://github.com/oerdnj/deb.sury.org/issues/56
+			#sudo apt install -y language-pack-en-base
+			sudo LC_ALL=C.UTF-8 add-apt-repository -y ppa:ondrej/php
+		else
+			[[ ! -s /usr/share/keyrings/php-archive-keyring.gpg ]] && sudo rm -rf /usr/share/keyrings/php-archive-keyring.gpg # Prevent issues!
+			[[ ! -f /usr/share/keyrings/php-archive-keyring.gpg ]] && wget -nv -O- 'https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x14aa40ec0831756756d7f66c4f4ea0aae5267a6c' | sudo gpg --dearmor -o /usr/share/keyrings/php-archive-keyring.gpg
+			echo "deb [signed-by=/usr/share/keyrings/php-archive-keyring.gpg] https://ppa.launchpadcontent.net/ondrej/php/ubuntu $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/php.list
+		fi
+		
 		local code="run"
 	elif [[ $2 == "php" ]]; then
 		echo "${dim}PHP is already installed!${end}"
 		[[ $code != "run" ]] && local code=0
 	fi
 	if [[ ( $2 == "php" || $4 == "redis" ) && $(conf_read php-tool-redis) != "true" ]] && ! [[ $4 =~ ^(light|basic)$ ]]; then
-		# Now there is an Official PPA: https://github.com/redis/redis-debian - https://launchpad.net/~redislabs/+archive/ubuntu/redis
-		# Snap is available but it has no support for ARM architecture: https://snapcraft.io/redis
-		echo | sudo add-apt-repository ppa:redislabs/redis
+		if [[ $(lsb_release -c | cut -d':' -f 2 | xargs) =~ ^(bionic|focal)$ ]]; then
+			# Now there is an Official PPA: https://github.com/redis/redis-debian - https://launchpad.net/~redislabs/+archive/ubuntu/redis
+			# Snap is available but it has no support for ARM architecture: https://snapcraft.io/redis
+			echo | sudo add-apt-repository ppa:redislabs/redis
+		else
+			[[ ! -s /usr/share/keyrings/redis-archive-keyring.gpg ]] && sudo rm -rf /usr/share/keyrings/redis-archive-keyring.gpg # Prevent issues!
+			[[ ! -f /usr/share/keyrings/redis-archive-keyring.gpg ]] && wget -nv -O- https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
+			echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/redis.list
+		fi
+		
 		local code="run"
 	fi
 	
 	if [[ $3 =~ ^(mysql|mysql-client)$ && $(conf_read mysql-client) != "true" ]]; then
 		[[ -n $(conf_read mysql-ver) && $(check_mysql_version $(conf_read mysql-ver)) == "true" ]] || conf_write mysql-ver $mysql_default
 		
-		# https://downloads.mariadb.org/mariadb/repositories/
-		sudo apt-key adv --fetch-keys 'https://mariadb.org/mariadb_release_signing_key.asc'
-		sudo add-apt-repository "deb [arch=amd64,arm64,ppc64el] http://mirrors.syringanetworks.net/mariadb/repo/$(conf_read mysql-ver)/ubuntu $(check_osname) main"
+		# REMOVE: when a new LTS is released and jammy supports more than one version.
+		if [[ $(conf_read mysql-ver) != "10.6" && $(lsb_release -c | cut -d':' -f 2 | xargs) == "jammy" ]]; then
+			conf_write mysql-ver 10.6
+			echo "${gre}Force MariaDB 10.6 because is the only LTS version supported in Ubuntu 22.04!${end}"
+		fi
+		
+		# https://mariadb.org/download/?t=repo-config
+		if [[ $(lsb_release -c | cut -d':' -f 2 | xargs) =~ ^(bionic|focal)$ ]]; then
+			sudo apt-key adv --fetch-keys 'https://mariadb.org/mariadb_release_signing_key.asc'
+			echo | sudo add-apt-repository "deb [arch=amd64,arm64,ppc64el] http://mirrors.syringanetworks.net/mariadb/repo/$(conf_read mysql-ver)/ubuntu $(check_osname) main"
+		else
+			[[ ! -s /usr/share/keyrings/mariadb-archive-keyring.gpg ]] && sudo rm -rf /usr/share/keyrings/mariadb-archive-keyring.gpg # Prevent issues!
+			[[ ! -f /usr/share/keyrings/mariadb-archive-keyring.gpg ]] && wget -nv -O- 'https://mariadb.org/mariadb_release_signing_key.asc' | sudo gpg --dearmor -o /usr/share/keyrings/mariadb-archive-keyring.gpg
+			echo "deb [signed-by=/usr/share/keyrings/mariadb-archive-keyring.gpg] http://mirrors.syringanetworks.net/mariadb/repo/$(conf_read mysql-ver)/ubuntu $(check_osname) main" | sudo tee /etc/apt/sources.list.d/mariadb.list
+		fi
 		local code="run"
 	elif [[ $3 == "mysql-client" && $(conf_read mysql-client) == "true" ]]; then
 		echo "${dim}MySQL Client is already installed!${end}"
@@ -842,6 +901,9 @@ stack_builder() {
 	elif [[ $3 == "mysql" && $(conf_read mysql) == "true" ]]; then
 		echo "${dim}MySQL is already installed!${end}"
 		[[ $code != "run" ]] && local code=0
+	elif [[ $3 == "mysql" && $(conf_read mysql-client) == "true" ]]; then
+		echo "${dim}MySQL Client is already installed!${end}"
+		local code="run"
 	fi
 	
 	# Exit before update!
