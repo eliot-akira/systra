@@ -8,9 +8,12 @@ echo "  install                   Install system"
 echo
 echo "  new [domain]              Create new site"
 echo "  new [domain] [folder]     Create new child site"
+echo "  new-cert [domain]         Create new certificate"
 echo
 echo "  delete [domain]           Delete site"
 echo "  delete [domain] [folder]  Delete child site"
+echo "  delete-db [name]          Delete database by name"
+echo "  delete-cert [domain]      Delete certificate by domain name"
 echo
 echo "  info                      Info about system"
 echo "  info [domain]             Info about site"
