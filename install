@@ -23,6 +23,9 @@ if [ ! -f ~/.bash_aliases ]; then
   cp $SCRIPTPATH/assets/.profile ~
   cp $SCRIPTPATH/assets/.bash_aliases ~
 
+  # Remove welcome message on SSH login
+  touch ~/.hushlogin
+
   # Cron job report wrapper - See ./assets/crontab-template.txt
   cp $SCRIPTPATH/assets/cronic ~/bin
 
