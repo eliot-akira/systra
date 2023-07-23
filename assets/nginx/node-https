@@ -1,6 +1,7 @@
 server {
 
   server_name APP_DOMAIN;
+  root /home/SERVER_USER/apps/APP_DOMAIN/;
 
   listen [::]:443 ssl;
   listen 443 ssl;
