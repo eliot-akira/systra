@@ -6,15 +6,14 @@
 #        Don't like our defaults? Every part of Webinoly is overrideable!         #
 #                                                                                 # 
 # You should NEVER modify this file if you are not sure about what you are doing. #
-# We have made a very detailed and extensive documentation just for you!
+# We have made a very detailed and extensive documentation just for you!          #
 # Please, read: https://webinoly.com/documentation/                               #
 #                                                                                 #
 # 1 - Uncomment the variable (Remove the '#' at the beggining)                    #
 # 2 - Set your custom value (var:value)                                           #
 # 3 - And then 'sudo webinoly -server-reset' to changes take effect.              #
 #                                                                                 #
-# * Reset only one package is allowed: -server-reset=php (nginx,php,mysql)        #
-# ** Operating System settings are loaded with Nginx.                             #
+# * Reset only one package is allowed: -server-reset=php (os,nginx,php,mysql)     #
 ###################################################################################
 
 
@@ -53,6 +52,16 @@
 #swap-mem:1
 
 
+# IAM Role (AWS Credentials)
+# Values: boolean (true/false)
+# Default: false
+# Note: (server-reset not needed)
+# Note: Set to 'true' if your EC2 instance has an IAM Role attached with full access to S3
+# Same as: sudo webinoly -aws-s3-credentials=awsiamrole
+###########################
+#awsiamrole:false
+
+
 
 
 
@@ -72,6 +81,7 @@
 # Maximum Upload file size
 # Values: numeric int (MB)
 # Default: 100
+# Note: PHP is also affected by this setting (max file/post size)
 ###########################
 #max-mb-uploads:100
 
@@ -95,21 +105,32 @@
 #sftp-www-data:false
 
 
-# FastCGI Cache
-# Values: <time> (s,m,h,d,w,M,y)
-# Default: 30d,7d,1m (Success,Inactive,Redirects)
-# Note: https://webinoly.com/documentation/webinolys/#cache
-# Same as: sudo webinoly -cache-valid
-###########################
-#fastcgi-conf:30d,7d,1m
-
-
 # Nginx Access Logs Disabled
 # Values: boolean (true/false)
 # Default: true
+# Note: This setting will be applied to new sites, or for existing sites 'access log' needs to be reenabled (same for global).
 # Same as: sudo log -only-error=on
 ###########################
 #global-access-log-off:true
+
+
+# Nginx Log Format
+# Values: basic | extended | custom
+# Default: basic
+# With server reset only the global setting is applied.
+# Note: This setting will be applied to new sites, or for existing sites 'access log' needs to be reenabled (same for global).
+# Note: https://webinoly.com/documentation/logs/#format
+###########################
+#nginx-log-format:basic
+
+
+# Nginx Error Log Level
+# Values: info | notice | warn | error | crit | alert | emerg
+# Default: error
+# With server reset only the global setting is applied.
+# Note: This setting will be applied to new sites, or for existing sites 'access log' needs to be reenabled (same for global).
+###########################
+#nginx-error-log-level:error
 
 
 # Nginx Default Response
@@ -153,14 +174,38 @@
 #blockip:1.1.1.1,2.2.2.2
 
 
-# IAM Role (AWS Credentials)
-# Values: boolean (true/false)
-# Default: false
-# Note: (server-reset not needed)
-# Note: Set to 'true' if your EC2 instance has an IAM Role attached with full access to S3
-# Same as: sudo webinoly -aws-s3-credentials=awsiamrole
+# Block/Deny files and extensions
+# Values:  <filename>|<filename>... (with this extension only: txt|html|htm|md)
+# Values:  <ext>|<ext>... (any file using any of these extensions)
+# Note: This is a security feature, please don't modify unless you are sure about it.
+# Note: For example, any request to 'readme.txt' or 'name.log' will be blocked (case insensitive) by default.
+# Note: To revert any changes and set the original Webinoly defaults, just #comment these two variables and then server-reset.
+# Note: You can remove some extensions like 'exe' if you are distributing installers, for instance, or you can add any of your preference.
 ###########################
-#awsiamrole:false
+#locations-deny-files:changelog|example|installation|legalnotice|license|readme|wp-config
+#locations-deny-extensions:7z|asc|asp|aspx|ba|bak|bash|bat|bin|bz2|c|cfg|cgi|class|com|conf|cpp|crt|cs|dat|db|dbf|deb|der|dll|dmg|dmp|dump|ear|exe|git|gz|h|hg|hqx|img|ini|iso|jar|jsp|log|mdb|msi|msm|msp|old|orig|original|out|pem|php#|php_bak|php~|pkg|pl|ppk|py|rar|rdf|rpm|run|save|sh|sql|srv|svn|swo|swp|sys|tar|taz|tcl|tgz|tk|tmp|tpl|tz|vb|war|wsf|z|zip
+
+
+# FastCGI Cache
+# Values: <time> (s,m,h,d,w,M,y)
+# Default: 30d,7d,1m (Success,Inactive,Redirects)
+# Note: https://webinoly.com/documentation/webinolys/#cache
+# Same as: sudo webinoly -cache-valid
+###########################
+#fastcgi-conf:30d,7d,1m
+
+
+# WordPress FastCGI Cache Defaults
+# Values: all | never (query strings)
+# Values:  <uri>|<uri>... (url)
+# Values:  <cookie>|<cookie>... (cookie)
+# Note: To revert any changes and set the original Webinoly defaults, just #comment these three variables and then server-reset.
+# Note: Also, you can add further rules via command line using the proper commands described in the docs.
+# Note: https://webinoly.com/documentation/webinolys/#cache
+###########################
+#wpcache-query-strings:never
+#wpcache-exclude-url:/wp-admin/|/xmlrpc.php|wp-.*.php|index.php|/feed/|.*sitemap.*\.xml|/feed/|/account/|/add_to_cart/|/cart/|/my-account/|/checkout/|/logout/
+#wpcache-exclude-cookie:comment_author|wordpress_[a-f0-9]+|wp-postpass|wordpress_no_cache|wordpress_logged_in|[a-z0-9]+_items_in_cart|[a-z0-9]+_cart_hash
 
 
 # WordPress Login Basic Authentication
@@ -179,13 +224,6 @@
 # Default: limited
 ###########################
 #xmlrpc:limited
-
-
-# Number of lines shown when log command is used (tail)
-# Values: numeric int
-# Default: 10
-###########################
-#log-lines:10
 
 
 # HTTP Header: Cache Control
@@ -213,12 +251,12 @@
 
 
 # HTTP Header: Permissions Policy
-# Values: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Feature-Policy
+# Values: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Permissions-Policy
 # Default: <empty>
 # Note: Use 'floc' value to automatically include the policy to forbid Topics API calculation.
 # Note: https://developer.chrome.com/docs/privacy-sandbox/topics/#site-opt-out
 ###########################
-#header-permissions:microphone 'none'; geolocation 'none'
+#header-permissions:accelerometer=(),autoplay=(),camera=(),display-capture=(),encrypted-media=(),fullscreen=(),gamepad=(),geolocation=(),gyroscope=(),hid=(),local-fonts=(),magnetometer=(),microphone=(),midi=(),payment=(),picture-in-picture=(),publickey-credentials-get=(),screen-wake-lock=(),serial=(),usb=(),web-share=(),xr-spatial-tracking=()
 
 
 # HTTP Header: Referrer Policy
@@ -240,6 +278,8 @@
 # HTTP Header: X-Frame-Options
 # Values: deny | sameorigin | allow-from | off
 # Default: sameorigin
+# Note: This header is no longer recommended and support will be removed very soon from Webinoly.
+# Note: The Content-Security-Policy HTTP header has a frame-ancestors directive which obsoletes this header for supporting browsers.
 # Note: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Frame-Options
 ###########################
 #header-xfo:sameorigin
@@ -257,10 +297,13 @@
 
 # HTTP Header: X-XSS-Protection
 # Values: boolean (true/false)
-# Default: true (X-XSS-Protection: 1; mode=block)
+# Default: false
+# Note: This header is no longer recommended and support will be removed very soon from Webinoly.
+# Note: These protections are largely unnecessary in modern browsers when sites implement a strong Content-Security-Policy.
 # Note: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-XSS-Protection
+# Note: When true is set: (X-XSS-Protection: 1; mode=block)
 ###########################
-#header-xssp:true
+#header-xssp:false
 
 
 # HTTP Header: Add any other Custom Header
@@ -290,6 +333,7 @@
 # Default: <variable> (calculated based on your server resources)
 ###########################
 #php-pm:dynamic
+
 
 # PHP number of child processes to be created
 # Values: numeric int
@@ -321,6 +365,32 @@
 #php-max-files:20
 
 
+# PHP How many input variables may be accepted
+# Values: numeric int
+# Default: 5000
+# Note: Limit is applied to $_GET, $_POST and $_COOKIE superglobal separately.
+###########################
+#php-max-input-vars:5000
+
+
+# PHP OpCache Validate Timestamps
+# Values: boolean (true/false)
+# Default: true
+# Note: When this directive is disabled, you must reset OPcache manually or by restarting the Web server for changes to the filesystem to take effect.
+###########################
+#php-opcache-timestamps:true
+
+
+# PHP OpCache Revalidate Frequency
+# Values: numeric int (seconds)
+# Default: 2
+# Note: Raising this value can cause developers to notice that changes in PHP code not taking effect. (similar to validate timestamps)
+# Note: This configuration directive is ignored if opcache.validate_timestamps is disabled.
+# Note: A good value (10-15), production servers with not frequent changes in code (60).
+###########################
+#php-opcache-reval:2
+
+
 # PHP Path_Info
 # Values: boolean (true/false)
 # Default: true
@@ -341,14 +411,24 @@
 
 
 
-###########################
-#####      MySQL      #####
-###########################
+#####################################
+#####      MySQL / MariaDB      #####
+#####################################
 
-# MariaDB Version
+# Database Engine
+# Values: mariadb | mysql
+# Default: mariadb
+# Note: (set before installing, server-reset not needed)
+# Note: NEVER change this value here when MySQL/MariaDB package is already installed.
+###########################
+#db-engine:mariadb
+
+
+# MySQL/MariaDB Version
 # Values: https://mariadb.com/kb/en/mariadb-server-release-dates/ (at least latest three stable)
 # Default: <latest-stable>
 # Note: (set before installing, server-reset not needed)
+# Note: In case of MySQL, 8.0 is the only supported version.
 # Note: NEVER change this value here when MySQL (MariaDB) package is already installed, use the proper command instead.
 # Same as: sudo stack -mysql-ver=10.6 (<-This is the proper command to change the MarianDB version even when is already installed)
 ###########################
@@ -376,7 +456,7 @@
 #dbrole:full
 
 
-# MySQL General Log
+# MySQL/MariaDB General Log
 # Values: boolean (true/false)
 # Default: false
 # Note: When enabled, you can see this log in real-time using 'sudo log -mysql=general'
@@ -384,7 +464,7 @@
 #mysql-log-general:false
 
 
-# MySQL Binary Log
+# MySQL/MariaDB Binary Log
 # Values: boolean (true/false)
 # Default: false
 # Note: When enabled, you can see this log in real-time using 'sudo log -mysql=binary'
@@ -392,7 +472,7 @@
 #mysql-log-binary:false
 
 
-# MySQL Slow Query Log
+# MySQL/MariaDB Slow Query Log
 # Values: boolean (true/false)
 # Default: false
 # Note: When enabled, you can see this log in real-time using 'sudo log -mysql=slow'
@@ -400,7 +480,7 @@
 #mysql-log-slow:false
 
 
-# MySQL Long Query Time
+# MySQL/MariaDB Long Query Time
 # Values: number int (seconds)
 # Default: 10
 # Note: If a query takes longer than this many seconds to execute, the query is logged to the slow query log.
@@ -408,7 +488,7 @@
 #mysql-long-query-time:3
 
 
-# MySQL Public/External Access
+# MySQL/MariaDB Public/External Access
 # Values: boolean (true/false)
 # Default: false
 # Same as: sudo webinoly -mysql-public-access=on

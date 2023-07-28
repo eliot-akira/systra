@@ -14,16 +14,23 @@ readonly ramb=$(($ramk/1000))
 [[ $cores =~ ^[0-9]+$ ]] || echo "${red}[ERROR] System info (cores) retrieve corrupted!${end}"
 [[ $swapm =~ ^[0-9]+$ ]] || echo "${red}[ERROR] System info (swap) retrieve corrupted!${end}"
 [[ $ramk =~ ^[0-9]+$ ]] || echo "${red}[ERROR] System info (ram) retrieve corrupted!${end}"
+if [[ $(conf_read db-engine) == "mysql" && $ram -lt 1 ]]; then
+	echo "${red}[ERROR] MySQL is set as database engine!${dim} (Not enough RAM: ${ramb}MB)"
+	echo "You should consider MariaDB instead for small servers under 2GB.${end}"
+	exit 1
+fi
 
 
 linux_optim() {
-	api-events_update in4
+	api-events_update ic1
 	[[ $(conf_read linux-optim) == "true" ]] && return
 	
 	# Kernel Optimization
 	if [[ $(conf_read kernel-optim) != "false" ]]; then
-		api-events_update in5
-		sudo cat /opt/webinoly/templates/general/sysctl >> /etc/sysctl.conf
+		echo "${gre}Wait while Webinoly optimize your Ubuntu Operating System...${end}"
+		api-events_update ic2
+		[[ -f /etc/sysctl.d/90-webinoly.conf ]] && sudo rm -rf /etc/sysctl.d/90-webinoly.conf
+		sudo cp /opt/webinoly/templates/general/sysctl /etc/sysctl.d/90-webinoly.conf
 		sudo modprobe tcp_bbr
 		
 		# https://github.com/amazonlinux/autotune
@@ -34,23 +41,23 @@ linux_optim() {
 		
 		if [[ $ram -gt 28 ]]; then
 			# https://mariadb.com/kb/en/configuring-swappiness/
-			sudo sed -i "/vm.swappiness =/c \vm.swappiness = 1" /etc/sysctl.conf
+			sudo sed -i "/vm.swappiness =/c \vm.swappiness = 1" /etc/sysctl.d/90-webinoly.conf
 			
-			sudo sed -i "/vm.min_free_kbytes =/c \vm.min_free_kbytes = $(($ramb*20))" /etc/sysctl.conf
-			sudo sed -i "/vm.dirty_ratio =/c \vm.dirty_ratio = 0" /etc/sysctl.conf
-			sudo sed -i "/vm.dirty_background_ratio =/c \vm.dirty_background_ratio = 0" /etc/sysctl.conf
-			sudo sed -i "/vm.dirty_expire_centisecs =/c \vm.dirty_expire_centisecs = 500" /etc/sysctl.conf
-			sudo sed -i "/#vm.dirty_bytes =/c \vm.dirty_bytes = 5505024000" /etc/sysctl.conf
-			sudo sed -i "/#vm.dirty_background_bytes =/c \vm.dirty_background_bytes = 917504000" /etc/sysctl.conf
-			sudo sed -i "/#vm.dirty_writeback_centisecs =/c \vm.dirty_writeback_centisecs = 100" /etc/sysctl.conf
+			sudo sed -i "/vm.min_free_kbytes =/c \vm.min_free_kbytes = $(($ramb*20))" /etc/sysctl.d/90-webinoly.conf
+			sudo sed -i "/vm.dirty_ratio =/c \vm.dirty_ratio = 0" /etc/sysctl.d/90-webinoly.conf
+			sudo sed -i "/vm.dirty_background_ratio =/c \vm.dirty_background_ratio = 0" /etc/sysctl.d/90-webinoly.conf
+			sudo sed -i "/vm.dirty_expire_centisecs =/c \vm.dirty_expire_centisecs = 500" /etc/sysctl.d/90-webinoly.conf
+			sudo sed -i "/#vm.dirty_bytes =/c \vm.dirty_bytes = 5505024000" /etc/sysctl.d/90-webinoly.conf
+			sudo sed -i "/#vm.dirty_background_bytes =/c \vm.dirty_background_bytes = 917504000" /etc/sysctl.d/90-webinoly.conf
+			sudo sed -i "/#vm.dirty_writeback_centisecs =/c \vm.dirty_writeback_centisecs = 100" /etc/sysctl.d/90-webinoly.conf
 		elif [[ $ram -gt 2 ]]; then
 			# Default is 65M, if RAM >= 3Gb take 3%, and > 28Gb only 2%
-			sudo sed -i "/vm.min_free_kbytes =/c \vm.min_free_kbytes = $(($ramb*30))" /etc/sysctl.conf
+			sudo sed -i "/vm.min_free_kbytes =/c \vm.min_free_kbytes = $(($ramb*30))" /etc/sysctl.d/90-webinoly.conf
 			
 			# https://lonesysadmin.net/2013/12/22/better-linux-disk-caching-performance-vm-dirty_ratio/
-			sudo sed -i "/vm.dirty_ratio =/c \vm.dirty_ratio = 30" /etc/sysctl.conf
-			sudo sed -i "/vm.dirty_expire_centisecs =/c \vm.dirty_expire_centisecs = 900" /etc/sysctl.conf
-			sudo sed -i "/vm.swappiness =/c \vm.swappiness = 5" /etc/sysctl.conf
+			sudo sed -i "/vm.dirty_ratio =/c \vm.dirty_ratio = 30" /etc/sysctl.d/90-webinoly.conf
+			sudo sed -i "/vm.dirty_expire_centisecs =/c \vm.dirty_expire_centisecs = 900" /etc/sysctl.d/90-webinoly.conf
+			sudo sed -i "/vm.swappiness =/c \vm.swappiness = 5" /etc/sysctl.d/90-webinoly.conf
 		fi
 		
 		if [[ $ram -gt 1 ]]; then
@@ -61,14 +68,21 @@ linux_optim() {
 			local msgmni=1024
 		fi
 		
-		# https://www.ibm.com/docs/es/db2/11.1?topic=unix-modifying-kernel-parameters-linux
-		sudo sed -i "/kernel.shmmni =/c \kernel.shmmni = $shmmni" /etc/sysctl.conf
-		sudo sed -i "/kernel.shmmax =/c \kernel.shmmax = $(($ramk*800))" /etc/sysctl.conf # Less than 80% of total ram
-		sudo sed -i "/kernel.shmall =/c \kernel.shmall = $(($(getconf PAGE_SIZE)*2))" /etc/sysctl.conf
-		sudo sed -i "/kernel.msgmni =/c \kernel.msgmni = $msgmni" /etc/sysctl.conf
-		sudo sed -i "/kernel.sem =/c \kernel.sem = 250 1024000 32 $shmmni" /etc/sysctl.conf
-		sudo sysctl -p -q
-		api-events_update in6
+		# Although you can apply values larger than 32768 by using the boot parameter ipcmni_extend, the values are still capped to 32768 internally.
+		[[ $shmmni -gt 32768 ]] && local shmmni=32768
+		[[ $msgmni -gt 32768 ]] && local msgmni=32768
+		
+		# https://www.ibm.com/docs/en/db2/11.1?topic=unix-modifying-kernel-parameters-linux
+		sudo sed -i "/kernel.shmmni =/c \kernel.shmmni = $shmmni" /etc/sysctl.d/90-webinoly.conf
+		sudo sed -i "/kernel.shmmax =/c \kernel.shmmax = $(($ramk*800))" /etc/sysctl.d/90-webinoly.conf # Less than 80% of total ram
+		sudo sed -i "/kernel.shmall =/c \kernel.shmall = $(($(getconf PAGE_SIZE)*2))" /etc/sysctl.d/90-webinoly.conf
+		sudo sed -i "/kernel.msgmni =/c \kernel.msgmni = $msgmni" /etc/sysctl.d/90-webinoly.conf
+		sudo sed -i "/kernel.sem =/c \kernel.sem = 250 1024000 32 $shmmni" /etc/sysctl.d/90-webinoly.conf
+		
+		# Also: 'sudo service procps force-reload' but we prefer this method to better display errors (just in case)
+		sudo sysctl -p -q /etc/sysctl.d/90-webinoly.conf
+		
+		api-events_update ic3
 	fi
 	
 	# File directors per process
@@ -117,9 +131,9 @@ WantedBy=multi-user.target" >> /etc/systemd/system/webinoly-disable-thp.service
 	[[ -n $(conf_read timezone) ]] && set_timezone
 	
 	sudo systemctl daemon-reload
-	sudo systemctl restart nginx # We need to kill the process, don't use reload
+	[[ $(conf_read nginx) == "true" ]] && sudo systemctl restart nginx # We need to kill the process, don't use reload
 	conf_write linux-optim true
-	api-events_update in9
+	api-events_update ic6
 }
 
 
@@ -128,9 +142,10 @@ linux_purge() {
 		api-events_update pn7
 		
 		sudo rm -rf /etc/systemd/system/nginx.service.d
+		sudo rm -rf /etc/sysctl.d/90-webinoly.conf
 		sudo sed -i '/WebinolyStart/,/WebinolyEnd/{/.*/d}' /etc/security/limits.conf
-		sudo sed -i '/WebinolyStart/,/WebinolyEnd/{/.*/d}' /etc/sysctl.conf
-		sudo sysctl -p -q
+		#sudo sysctl -p -q /etc/sysctl.d/90-webinoly.conf - reload all sysctl, webinoly file doesn't exist at this point!
+		sudo service procps force-reload
 		
 		sudo sed -i '/\/run/d' /etc/fstab
 		sudo mount -o remount tmpfs
@@ -162,10 +177,13 @@ nginx_install() {
 	[[ ! -d /etc/nginx/sites-enabled ]] && sudo mkdir /etc/nginx/sites-enabled
 	[[ ! -d /etc/nginx/apps.d ]] && sudo mkdir /etc/nginx/apps.d
 
-	sudo sed -i 's/listen.*80;/listen 80 default_server;/' /etc/nginx/conf.d/default.conf
-	sudo sed -i 's/listen.*\[::\]:80;/listen [::]:80 default_server;/' /etc/nginx/conf.d/default.conf
-	sudo mv /etc/nginx/conf.d/default.conf /etc/nginx/sites-available/default
-	sudo ln -s /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
+	# In reinstalation (after purge with keep-data) this file don't exist
+	if [[ -f /etc/nginx/conf.d/default.conf ]]; then
+		sudo sed -i 's/listen.*80;/listen 80 default_server;/' /etc/nginx/conf.d/default.conf
+		sudo sed -i 's/listen.*\[::\]:80;/listen [::]:80 default_server;/' /etc/nginx/conf.d/default.conf
+		sudo mv /etc/nginx/conf.d/default.conf /etc/nginx/sites-available/default
+		sudo ln -s /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
+	fi
 	
 	sudo nginx -t && sudo systemctl start nginx
 	sudo systemctl enable nginx
@@ -197,14 +215,14 @@ php_install() {
 
 
 mysql_install() {
-	api-events_update im1
-	echo "${gre}MySQL version '$(conf_read mysql-ver)' is set as default.${end}"
+	api-events_update im3
+	echo "${gre}MySQL/MariaDB version '$(conf_read mysql-ver)' is set as default.${end}"
 	
 	# debconf-utils for unattended scripts
 	# debconf-get-selections | grep phpmyadmin   <<-- list conf variables
 		
 	# Generate mysql user passwords
-	if [[ -z $(conf_read mysql-root) && -z $(conf_read mysql-admin) ]]; then
+	if [[ -z $(conf_read mysql-root) || -z $(conf_read mysql-admin) ]]; then
 		local AUTOGENPASS_ROOT=`pwgen -s -1 16`
 		local AUTOGENPASS_ADMIN=`pwgen -s -1 16`
 		local enc_pass_root=$( echo $AUTOGENPASS_ROOT | openssl enc -a -salt )
@@ -215,29 +233,35 @@ mysql_install() {
 		# In case of re-installation after purge with keep-data option.
 		local AUTOGENPASS_ROOT=$( echo $(conf_read mysql-root) | openssl enc -d -a -salt )
 		local AUTOGENPASS_ADMIN=$( echo $(conf_read mysql-admin) | openssl enc -d -a -salt )
-		local reinstall="true"
+		conf_write mysql-reinstall true
 	fi
 	
-	# MariaDB Installation
-	local ver=$(conf_read mysql-ver)
-	echo "mariadb-server-${ver} mysql-server/root_password password $AUTOGENPASS_ROOT" | debconf-set-selections
-	echo "mariadb-server-${ver} mysql-server/root_password_again password $AUTOGENPASS_ROOT" | debconf-set-selections
-	sudo apt -y install apt-transport-https dirmngr mariadb-server
+	# MySQL/MariaDB Installation
+	if [[ $(conf_read db-engine) == "mysql" ]]; then
+		# We set the root password in the next step after installation.
+		echo "mysql-community-server mysql-community-server/root-pass password " | debconf-set-selections
+		#echo "mysql-community-server mysql-community-server/re-root-pass password $AUTOGENPASS_ROOT" | debconf-set-selections
+		echo "mysql-community-server mysql-server/default-auth-override select Use Strong Password Encryption (RECOMMENDED)" | debconf-set-selections
+		sudo apt -y install mysql-server
+	else
+		# This option is no longer available in recent MariaDB versions, so we set the root password in the next step after installation.
+		#local ver=$(conf_read mysql-ver)
+		#echo "mariadb-server-${ver} mysql-server/root_password password $AUTOGENPASS_ROOT" | debconf-set-selections
+		#echo "mariadb-server-${ver} mysql-server/root_password_again password $AUTOGENPASS_ROOT" | debconf-set-selections
+		sudo apt -y install apt-transport-https dirmngr mariadb-server
+	fi
 	
 	conf_write mysql true
-	
-	# https://mariadb.com/kb/en/mysql_upgrade/
-	if [[ $reinstall == "true" ]]; then
-		echo "${blu}${dim}Seems like you are reinstalling MySQL... Upgrading your old tables!${end}"
-		sudo mysql_upgrade --user=root --password=${AUTOGENPASS_ROOT} --force --silent
-	fi
-	
-	# Binaly logs disabled by default and Error logging not in syslog (syslog is default).
-	mysql_default_cnf
-	sudo log -mysql=binary -disable > /dev/null 2>&1
 
 	#Instead of mysql_secure_installation we do this: (same but manually, because not acept unattended)
-	sudo mysql --user=root -p$AUTOGENPASS_ROOT <<_EOF_
+	# - Set a password for root accounts
+	# - Remove the root accounts accessible from outside the localhost.
+	# - Remove anonymous-user accounts.
+	# - Delete the test database, accessible by anonymous users.
+	# - Reload the user privileges tables.
+	if [[ $(conf_read mysql-reinstall) != "true" ]]; then # Just for new and fresh installations! (not needed when reinstalling)
+		echo "${blu}${dim}MySQL/MariaDB Secure Installation! ${end}"
+		sudo mysql --user=root <<_EOF_
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
 DROP DATABASE IF EXISTS test;
@@ -246,17 +270,25 @@ CREATE USER IF NOT EXISTS 'admin'@'localhost' IDENTIFIED BY '${AUTOGENPASS_ADMIN
 GRANT ALL PRIVILEGES ON *.* TO 'admin'@'localhost' WITH GRANT OPTION;
 FLUSH PRIVILEGES;
 _EOF_
+
+		if [[ $(conf_read db-engine) == "mysql" ]]; then
+			sudo mysql --user=root -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH caching_sha2_password BY '${AUTOGENPASS_ROOT}';FLUSH PRIVILEGES;"
+		else
+			sudo mysql --user=root -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '${AUTOGENPASS_ROOT}';FLUSH PRIVILEGES;"
+		fi
+	fi
 	
+	sudo rm -rf $MYSQL_CONF_PATH/${MYSQL_CONF_PREF}-webinoly-login.cnf
 	api-events_update im4
-	echo "${gre}MySQL has been installed successfully! ${end}"
+	echo "${gre}MySQL/MariaDB has been installed successfully! ${end}"
 }
 
 mysql_client_install() {
-	api-events_update im2
-	sudo apt -y install mariadb-client
+	api-events_update im1
+	[[ $(conf_read db-engine) != "mysql" ]] && sudo apt -y install mariadb-client || sudo apt -y install mysql-client
 	conf_write mysql-client true
-	api-events_update im3
-	echo "${gre}MySQL Client has been successfully installed!${end}"
+	api-events_update im2
+	echo "${gre}MySQL/MariaDB Client has been successfully installed!${end}"
 }
 
 
@@ -279,19 +311,27 @@ nginx_optim() {
 	sudo cp -R /opt/webinoly/templates/nginx/common /etc/nginx/common
 	sudo cp -R /opt/webinoly/templates/nginx/conf.d/* /etc/nginx/conf.d/
 	sudo cat /opt/webinoly/templates/nginx/nginx.conf > /etc/nginx/nginx.conf
-	
-	# This files are backedup by server-reset (needs to be here to avoid nginx errors)
-	[[ -f /tmp/webinoly_blockips_backup ]] && sudo mv /tmp/webinoly_blockips_backup /etc/nginx/conf.d/blockips.conf
-	[[ -f /tmp/webinoly_backup ]] && sudo mv /tmp/webinoly_backup /etc/nginx/conf.d/webinoly.conf
 
 	sudo sed -i "/client_max_body_size /c \	client_max_body_size $(check_var max-mb-uploads)m;" /etc/nginx/nginx.conf
 	sudo sed -i "/worker_rlimit_core /c \worker_rlimit_core $fd_per_process;" /etc/nginx/nginx.conf
 	sudo sed -i "/worker_rlimit_nofile /c \worker_rlimit_nofile $fd_per_process;" /etc/nginx/nginx.conf
 	sudo sed -i "/open_file_cache max /c \	open_file_cache max=$(($fd_per_process/3)) inactive=5m;" /etc/nginx/nginx.conf
 	
+	# Locations
+	sudo sed -i "s&<locations-deny-extensions>&$(check_var locations-deny-extensions)&" /etc/nginx/common/locations.conf
+	sudo sed -i "s#<locations-deny-files>#$(check_var locations-deny-files)#" /etc/nginx/common/locations.conf
+	
+	# WP Cache
+	[[ $(check_var wpcache-query-strings) == "all" ]] && sudo sed -i '/# URL with a query string should always go to php/,/\} #End/{/.*/d}' /etc/nginx/common/wpfc.conf
+	sudo sed -i "s#<wpcache-exclude-url>#$(check_var wpcache-exclude-url)#" /etc/nginx/common/wpfc.conf
+	sudo sed -i "s#<wpcache-exclude-cookie>#$(check_var wpcache-exclude-cookie)#" /etc/nginx/common/wpfc.conf
+	
 	# Remove it, then add it again to prevent multiple # for each server-reset
 	sudo sed -i '/ SERVER_NAME /s/#//' /etc/nginx/fastcgi_params
 	sudo sed -i '/ SERVER_NAME /s/^/#/' /etc/nginx/fastcgi_params
+	
+	# Needed to prevent duplicates in server-reset, also in reinstallation (after purge with keep-data)
+	sudo sed -i '/WebinolyCustom/,/WebinolyCustomEnd/{/.*/d}' /etc/nginx/fastcgi_params
 	
 	echo '# WebinolyCustom
 fastcgi_param  SCRIPT_FILENAME    $request_filename;
@@ -305,13 +345,11 @@ fastcgi_param  HTTP_ACCEPT_ENCODING "";
 	sudo sed -i "/fastcgi_cache_path/c \fastcgi_cache_path /run/nginx-cache levels=1:2 keys_zone=WORDPRESS:50m max_size=$(((9*$ramb*$(check_var run-folder-size))/1000))m inactive=7d;" /etc/nginx/conf.d/fastcgi.conf
 	sudo sed -i "/fastcgi_read_timeout/c \fastcgi_read_timeout $(check_var php-max-time)s;" /etc/nginx/conf.d/fastcgi.conf
 	
-	echo "${gre}Wait while Webinoly optimize your Ubuntu Operating System...${end}"
-	
 	# www-data sftp default uploads permissions 755 and 644, instead of 775 and 664.
 	sudo sed -i '/USERGROUPS_ENAB/c \USERGROUPS_ENAB no' /etc/login.defs
-	linux_optim
 
 	# Check for dynamic variables.
+	sudo systemctl restart nginx # We need to kill the process, don't use reload (I don't know why here, but it's needed!)
 	[[ -n $(conf_read default-response) ]] && sudo webinoly -default-site=$(conf_read default-response)
 	[[ -n $(conf_read tools-port-set) ]] && sudo webinoly -tools-port=$(conf_read tools-port-set)
 	[[ -n $(conf_read tools-site) ]] && sudo webinoly -tools-site=$(conf_read tools-site)
@@ -369,7 +407,7 @@ location = /xmlrpc.php {
 	conf_write server-version $svr_version
 	conf_write nginx-optim true
 	sudo systemctl reload nginx
-	api-events_update in10
+	api-events_update in4
 	echo "${gre}Nginx has been successfully Optimized by Webinoly! ${end}"
 }
 
@@ -386,7 +424,6 @@ php_optim() {
 	[[ ! -f /opt/webinoly/templates/source/php-fpm.conf ]] && sudo cp -p /etc/php/${ver}/fpm/php-fpm.conf /opt/webinoly/templates/source/
 	
 	sudo sed -i -r "/^[;]?max_execution_time =/c\max_execution_time = $(check_var php-max-time)" /etc/php/$ver/fpm/php.ini
-	sudo sed -i -r "/^[;]?max_input_vars =/c\max_input_vars = 3000" /etc/php/$ver/fpm/php.ini
 	sudo sed -i -r '/^[;]?session.cookie_httponly =/c\session.cookie_httponly = 1' /etc/php/$ver/fpm/php.ini
 	sudo sed -i -r '/^[;]?expose_php =/c\expose_php = Off' /etc/php/$ver/fpm/php.ini
 	
@@ -396,12 +433,23 @@ php_optim() {
 	sudo sed -i -r "/^[;]?max_file_uploads =/c\max_file_uploads = $(check_var php-max-files)" /etc/php/$ver/fpm/php.ini
 	[[ $(check_var php-max-mem) -gt $(($(check_var max-mb-uploads)+1)) ]] && local phpmem=$(check_var php-max-mem) || local phpmem=$(($(check_var max-mb-uploads)+10))
 	sudo sed -i -r "/^[;]?memory_limit =/c\memory_limit = ${phpmem}M" /etc/php/$ver/fpm/php.ini
+	sudo sed -i -r "/^[;]?max_input_vars =/c\max_input_vars = $(check_var php-max-input-vars)" /etc/php/$ver/fpm/php.ini
 	
 	sudo sed -i -r "/^[;]?opcache.memory_consumption=/c\opcache.memory_consumption=$(check_var php-max-mem)" /etc/php/$ver/fpm/php.ini
-	sudo sed -i -r '/^[;]?opcache.interned_strings_buffer=/c\opcache.interned_strings_buffer=8' /etc/php/$ver/fpm/php.ini
-	sudo sed -i -r '/^[;]?opcache.max_accelerated_files=/c\opcache.max_accelerated_files=50000' /etc/php/$ver/fpm/php.ini
+	sudo sed -i -r '/^[;]?opcache.interned_strings_buffer=/c\opcache.interned_strings_buffer=16' /etc/php/$ver/fpm/php.ini
+	sudo sed -i -r '/^[;]?opcache.max_accelerated_files=/c\opcache.max_accelerated_files=100000' /etc/php/$ver/fpm/php.ini
+	sudo sed -i -r '/^[;]?opcache.max_wasted_percentage=/c\opcache.max_wasted_percentage=10' /etc/php/$ver/fpm/php.ini
 	sudo sed -i -r '/^[;]?opcache.enable_cli=/c\opcache.enable_cli=1' /etc/php/$ver/fpm/php.ini
 	sudo sed -i -r '/^[;]?opcache.enable=/c\opcache.enable=1' /etc/php/$ver/fpm/php.ini
+	
+	# Not set, unless non-empty!
+	if [[ $(check_var php-opcache-timestamps) != "false" ]]; then
+		sudo sed -i -r "/^[;]?opcache.validate_timestamps=/c\opcache.validate_timestamps=$(check_var php-opcache-timestamps)" /etc/php/$ver/fpm/php.ini
+	fi
+	if [[ $(check_var php-opcache-reval) != "false" ]]; then
+		sudo sed -i -r "/^[;]?opcache.revalidate_freq=/c\opcache.revalidate_freq=$(check_var php-opcache-reval)" /etc/php/$ver/fpm/php.ini
+	fi
+	
 	
 	[[ -n $(conf_read timezone) ]] && set_timezone
 	
@@ -415,6 +463,7 @@ php_optim() {
 	sudo sed -i -r '/^[;]?pm.status_path =/c\pm.status_path = /status' /etc/php/$ver/fpm/pool.d/www.conf
 	sudo sed -i -r '/^[;]?ping.path =/c\ping.path = /ping' /etc/php/$ver/fpm/pool.d/www.conf
 	sudo sed -i -r '/^[;]?listen = /c\listen = 127.0.0.1:9000' /etc/php/$ver/fpm/pool.d/www.conf
+	sudo sed -i -r '/^[;]?listen.allowed_clients = /c\listen.allowed_clients = 127.0.0.1' /etc/php/$ver/fpm/pool.d/www.conf
 	
 	[[ $(conf_read php-tool-redis) == "true" && -n $(conf_read redis-max-mem) ]] && redis_optim
 	conf_write php-optim true
@@ -424,16 +473,28 @@ php_optim() {
 }
 
 
-# MySQL OPTIM
+# MySQL/MariaDB OPTIM
 mysql_optim() {
 	api-events_update im5
+	mysql_default_cnf
 	
-	# If value is empty we will respect any other previous action done via commmand.
-	[[ $(conf_read mysql-log-general) == "true" ]] && sudo log -mysql=general -enable
-	[[ $(conf_read mysql-log-general) == "false" ]] && sudo log -mysql=general -disable
+	# MySQL/MariaDB login data
+	mysql_login_cnf
+	if [[ -n $(conf_read mysql-admin) ]]; then
+		sudo sed -i '/\[client\]/,/# ClientEnd/{/.*/d}' $MYSQL_CONF_PATH/${MYSQL_CONF_PREF}-webinoly-login.cnf
+		echo "[client]
+user = admin
+password = $( echo $(conf_read mysql-admin) | openssl enc -d -a -salt )
+host = localhost
+# ClientEnd" >> $MYSQL_CONF_PATH/${MYSQL_CONF_PREF}-webinoly-login.cnf
+	fi
 	
+	# If value is empty we will do nothing, to prevent undesired things (before 1.17.1 these dynvars were not used via command only conf file, now are both).
 	[[ $(conf_read mysql-log-binary) == "true" ]] && sudo log -mysql=binary -enable
 	[[ $(conf_read mysql-log-binary) == "false" ]] && sudo log -mysql=binary -disable
+	
+	[[ $(conf_read mysql-log-general) == "true" ]] && sudo log -mysql=general -enable
+	[[ $(conf_read mysql-log-general) == "false" ]] && sudo log -mysql=general -disable
 	
 	[[ $(conf_read mysql-log-slow) == "true" && -z $(conf_read mysql-long-query-time) ]] && sudo log -mysql=slow -enable
 	[[ $(conf_read mysql-log-slow) == "true" && -n $(conf_read mysql-long-query-time) ]] && sudo log -mysql=slow -enable -long-query-time=$(conf_read mysql-long-query-time)
@@ -442,32 +503,49 @@ mysql_optim() {
 	[[ $(conf_read mysql-public-access) == "true" ]] && sudo webinoly -mysql-public-access=on
 	[[ $(conf_read mysql-public-access) == "false" ]] && sudo webinoly -mysql-public-access=off
 	
+	# https://mariadb.com/kb/en/mysql_upgrade/
+	# The mysql_upgrade client is deprecated in MySQL 8. (This process is done automatically)
+	# Should do it using admin user, root has password and it may be removed in conf file.
+	# Should be here in optim, because when reinstalling admin login CNF is removed.
+	if [[ $(conf_read mysql-reinstall) == "true" && $(conf_read db-engine) != "mysql" ]]; then
+		echo "${blu}${dim}Seems like you are reinstalling MySQL/MariaDB... Upgrading your old tables!${end}"
+		sudo mysql_upgrade --user=admin --force --silent
+		conf_delete mysql-reinstall
+	fi
+	
 	conf_write mysql-optim true
 	api-events_update im6
-	echo "${gre}MySQL (MariaDB) has been successfully Optimized by Webinoly! ${end}"
+	echo "${gre}MySQL/MariaDB has been successfully Optimized by Webinoly! ${end}"
 }
 
 nginx_tool_site() {
 	# Tools site creation
 	[[ -z $(conf_read tools-port) ]] && conf_write tools-port $tools_port_default
 	
-	sudo site $(conf_read tools-port) -empty > /dev/null 2>&1
-	sudo cp /opt/webinoly/templates/nginx/admin_tools.conf /etc/nginx/sites-available/$(conf_read tools-port)
-	sudo sed -i "s/<port>/$(conf_read tools-port)/g"  /etc/nginx/sites-available/$(conf_read tools-port)
-	sudo nginx -t && sudo systemctl reload nginx
+	# Don't overwrite in case that exist (after purge with keep-data, for instance)
+	if [[ ! -f /etc/nginx/sites-available/$ADMIN_TOOLS_SITE ]]; then
+		sudo site $ADMIN_TOOLS_SITE -empty > /dev/null 2>&1
+		sudo cp /opt/webinoly/templates/general/admin_tools.conf /etc/nginx/sites-available/$ADMIN_TOOLS_SITE
+		sudo sed -i "s/<port>/$(conf_read tools-port)/g"  /etc/nginx/sites-available/$ADMIN_TOOLS_SITE
+		sudo sed -i "s/<admin_tools_sitename>/$ADMIN_TOOLS_SITE/g"  /etc/nginx/sites-available/$ADMIN_TOOLS_SITE
+		sudo nginx -t && sudo systemctl reload nginx
+	fi
 	
-	# Nginx Status Page
-	sudo touch /var/www/$(conf_read tools-port)/htdocs/nginx_status	
-	
-	# Robots.txt file in case someone remove HTTP Auth
-	sudo touch /var/www/$(conf_read tools-port)/htdocs/robots.txt
-	echo '# Just in case someone remove HTTP Auth protection.
-Disallow: /' > /var/www/$(conf_read tools-port)/htdocs/robots.txt
-	sudo chmod 644 /var/www/$(conf_read tools-port)/htdocs/robots.txt
-	sudo chown -R www-data:www-data /var/www/$(conf_read tools-port)/htdocs
+	# Don't overwrite in case that exist (after purge with keep-data, for instance)
+	if [[ ! -f /var/www/$ADMIN_TOOLS_SITE/htdocs ]]; then
+		# Nginx Status Page
+		sudo touch /var/www/$ADMIN_TOOLS_SITE/htdocs/nginx_status	
+		
+		# Robots.txt file in case someone remove HTTP Auth
+		sudo touch /var/www/$ADMIN_TOOLS_SITE/htdocs/robots.txt
+		echo '# Just in case someone remove HTTP Auth protection.
+	Disallow: /' > /var/www/$ADMIN_TOOLS_SITE/htdocs/robots.txt
+		sudo chmod 644 /var/www/$ADMIN_TOOLS_SITE/htdocs/robots.txt
+		sudo chown -R www-data:www-data /var/www/$ADMIN_TOOLS_SITE/htdocs
+	fi
 	
 	# in case php was installed before nginx
-	[[ $(conf_read php) == "true" && ! -f /var/www/$(conf_read tools-port)/htdocs/php/index.php ]] && php_tool_site
+	[[ $(conf_read php) == "true" && ! -f /var/www/$ADMIN_TOOLS_SITE/htdocs/php/index.php ]] && php_tool_site
 }
 
 
@@ -475,24 +553,24 @@ php_tool_site() {
 	[[ $(conf_read nginx) != "true" ]] && return
 
 	# Just for legacy support when tools site were created only with PHP support, today is created since Nginx always.
-	[[ ! -f /etc/nginx/sites-available/$(conf_read tools-port) ]] && nginx_tool_site
+	[[ ! -f /etc/nginx/sites-available/$ADMIN_TOOLS_SITE ]] && nginx_tool_site
 	
 	# Add PHP options in tools site.
 	
 	# Status pages
-	sudo touch /var/www/$(conf_read tools-port)/htdocs/ping
-	sudo touch /var/www/$(conf_read tools-port)/htdocs/status
+	sudo touch /var/www/$ADMIN_TOOLS_SITE/htdocs/ping
+	sudo touch /var/www/$ADMIN_TOOLS_SITE/htdocs/status
 	
 	#PHP info site
-	sudo mkdir -p /var/www/$(conf_read tools-port)/htdocs/php
-	sudo touch /var/www/$(conf_read tools-port)/htdocs/php/index.php
-	sudo echo '<?php phpinfo(); ?>' >> /var/www/$(conf_read tools-port)/htdocs/php/index.php
-	sudo chown -R www-data:www-data /var/www/$(conf_read tools-port)/htdocs
+	sudo mkdir -p /var/www/$ADMIN_TOOLS_SITE/htdocs/php
+	sudo touch /var/www/$ADMIN_TOOLS_SITE/htdocs/php/index.php
+	sudo echo '<?php phpinfo(); ?>' >> /var/www/$ADMIN_TOOLS_SITE/htdocs/php/index.php
+	sudo chown -R www-data:www-data /var/www/$ADMIN_TOOLS_SITE/htdocs
 }
 
 
 nginx_tool_ssl() {
-	api-events_update in11
+	api-events_update in5
 
 	# Install LetsEncrypt
 	local certb=0
@@ -512,13 +590,13 @@ nginx_tool_ssl() {
 	[[ ! -L /usr/bin/certbot ]] && sudo ln -s /snap/bin/certbot /usr/bin/certbot
 	
 	conf_write nginx-tool-ssl true
-	api-events_update in12
+	api-events_update in6
 	echo "${gre}Let's Encrypt (certbot) has been installed successfully! ${end}"
 }
 
 
 nginx_tool_bkp() {	
-	api-events_update in13
+	api-events_update in7
 	
 	# Instalar Duply & Duplicity with S3 support
 	# Now there is an Official PPA: https://launchpad.net/~duplicity-team/+archive/ubuntu/duplicity-release-git
@@ -531,19 +609,21 @@ nginx_tool_bkp() {
 	sudo apt install -y debhelper dh-python python3 gnupg librsync-dev par2 pep8 pylint python3-pytest python3-pytest-cov python3-pytest-runner python3-dev python3-fasteners python3-future python3-mock python3-pexpect python3-setuptools python3-setuptools-scm rdiff rename rsync python3-pip python3-boto3
 	
 	# Duplicity installation directly from source
-	# Temporal fix to remove warning - wait for: https://github.com/pypa/pip/issues/10556 - remove from stack purge too!
+	# Temporal fix to remove warning - wait for: https://github.com/pypa/pip/issues/10556 - remove from stack purge too! --root-user-action=ignore | Remove from update function also
 	sudo pip3 install duplicity 2>&1 | grep -v "pip as the 'root' user"
-	
-	# Temporal dynvar - in the next stack update we will update all the old snap installations
-	# Be sure to remove it from "stack" command too.
-	conf_write bkp-source-tmp true
+	# In future, we need to do the correct way - using virtual env
+	#sudo apt install python3-venv
+	#sudo python3 -m venv /opt/duplicity/
+	#sudo /opt/duplicity/bin/pip install --upgrade pip
+	#sudo /opt/duplicity/bin/pip install duplicity
+	#sudo ln -s /opt/duplicity/bin/duplicity /usr/bin/duplicity
 	
 	# https://sourceforge.net/projects/ftplicity/files/duply%20%28simple%20duplicity%29/
 	sudo cp /opt/webinoly/templates/general/duply /usr/bin/
 	sudo chmod 755 /usr/bin/duply
 	
 	conf_write nginx-tool-bkp true
-	api-events_update in14
+	api-events_update in8
 	echo "${gre}BackUp packages has been installed successfully! ${end}"
 }
 
@@ -605,21 +685,22 @@ mysql_tool_pma() {
 	api-events_update im7
 	
 	echo "${blu}${dim}Downloading phpMyAdmin...${end}"
-	sudo mkdir -p /var/www/$(conf_read tools-port)/htdocs/pma
-	sudo wget --timeout=15 -t 1 -qrO /var/www/$(conf_read tools-port)/htdocs/pma.tar.xz https://www.phpmyadmin.net/downloads/phpMyAdmin-latest-all-languages.tar.xz
+	sudo mkdir -p /var/www/$ADMIN_TOOLS_SITE/htdocs/pma
+	sudo wget --timeout=15 -t 1 -qrO /var/www/$ADMIN_TOOLS_SITE/htdocs/pma.tar.xz https://www.phpmyadmin.net/downloads/phpMyAdmin-latest-all-languages.tar.xz
 	
-	if [[ -s /var/www/$(conf_read tools-port)/htdocs/pma.tar.xz ]]; then	
-		sudo tar -xf /var/www/$(conf_read tools-port)/htdocs/pma.tar.xz -C /var/www/$(conf_read tools-port)/htdocs/pma
-		sudo mv /var/www/$(conf_read tools-port)/htdocs/pma/phpMyAdmin-*-all-languages/* /var/www/$(conf_read tools-port)/htdocs/pma/
-		sudo rm -rf /var/www/$(conf_read tools-port)/htdocs/pma/phpMyAdmin-*-all-languages
-		sudo rm -rf /var/www/$(conf_read tools-port)/htdocs/pma/test
-		sudo rm -rf /var/www/$(conf_read tools-port)/htdocs/pma/setup
-		sudo rm /var/www/$(conf_read tools-port)/htdocs/pma.tar.xz
+	if [[ -s /var/www/$ADMIN_TOOLS_SITE/htdocs/pma.tar.xz ]]; then	
+		sudo tar -xf /var/www/$ADMIN_TOOLS_SITE/htdocs/pma.tar.xz -C /var/www/$ADMIN_TOOLS_SITE/htdocs/pma
+		sudo mv /var/www/$ADMIN_TOOLS_SITE/htdocs/pma/phpMyAdmin-*-all-languages/* /var/www/$ADMIN_TOOLS_SITE/htdocs/pma/
+		sudo rm -rf /var/www/$ADMIN_TOOLS_SITE/htdocs/pma/phpMyAdmin-*-all-languages
+		sudo rm -rf /var/www/$ADMIN_TOOLS_SITE/htdocs/pma/test
+		sudo rm -rf /var/www/$ADMIN_TOOLS_SITE/htdocs/pma/setup
+		sudo rm /var/www/$ADMIN_TOOLS_SITE/htdocs/pma.tar.xz
 
-		sudo cp /var/www/$(conf_read tools-port)/htdocs/pma/config.sample.inc.php /var/www/$(conf_read tools-port)/htdocs/pma/config.inc.php
-		sudo sed -i "/blowfish_secret/c \$cfg['blowfish_secret'] = '$(pwgen -s -1 32)';" /var/www/$(conf_read tools-port)/htdocs/pma/config.inc.php
-		sudo chown -R www-data:www-data /var/www/$(conf_read tools-port)/htdocs/pma
-		sudo find /var/www/$(conf_read tools-port)/htdocs/pma -type f -print0 | sudo xargs -r -0 chmod 644
+		sudo cp /var/www/$ADMIN_TOOLS_SITE/htdocs/pma/config.sample.inc.php /var/www/$ADMIN_TOOLS_SITE/htdocs/pma/config.inc.php
+		sudo sed -i "/blowfish_secret/c \$cfg['blowfish_secret'] = '$(pwgen -s -1 32)';" /var/www/$ADMIN_TOOLS_SITE/htdocs/pma/config.inc.php
+		sudo chown -R www-data:www-data /var/www/$ADMIN_TOOLS_SITE/htdocs/pma
+		sudo find /var/www/$ADMIN_TOOLS_SITE/htdocs/pma -type f -print0 | sudo xargs -r -0 chmod 644
+		sudo find /var/www/$ADMIN_TOOLS_SITE/htdocs/pma -type d -print0 | sudo xargs -r -0 chmod 755
 		
 		conf_write mysql-tool-pma true
 		echo "${gre}phpMyAdmin has been installed successfully! ${end}"
@@ -670,7 +751,7 @@ swap_create() {
 
 	# https://help.ubuntu.com/community/SwapFaq
 	if [[ -z $sw || $sw == "0" ]]; then
-		api-events_update in7
+		api-events_update ic4
 		if [[ -n $(conf_read swap-mem) && $(conf_read swap-mem) =~ ^[0-9]+$ ]]; then
 			local newswap=$(conf_read swap-mem)
 		elif [[ $ram -le 2 ]]; then
@@ -733,7 +814,7 @@ swap_create() {
 			conf_write swap-owner webinoly
 			echo "${gre}A new SWAP file (${newswap}Gb) has been created! ${end}"
 		fi
-		api-events_update in8
+		api-events_update ic5
 	elif [[ -n $sw && $sw =~ ^[0-9]+$ ]]; then
 		[[ $(conf_read swap-owner) != "webinoly" ]] && conf_write swap-owner system
 		echo "${gre}SWAP file (${sw}Gb) detected!${end}"
@@ -743,23 +824,8 @@ swap_create() {
 }
 
 
-messagend_install() {
-	local ROOT_PW=$( echo $(conf_read mysql-root) | openssl enc -d -a -salt )
-	local ADMIN_PW=$( echo $(conf_read mysql-admin) | openssl enc -d -a -salt )
-	
-	echo ""
-	echo "${gre}"
-	echo "****************************************************************************"
-	echo "******${bol}            INSTALLATION HAS FINISHED SUCCESSFULLY              ${end}${gre}******"
-	echo "****************************************************************************"
-	echo "********      Save your DB access password in a secure place:       ********"
-	echo "******${dim}      root: ${ROOT_PW}       admin: ${ADMIN_PW}      ${end}${gre}******"
-	echo "****************************************************************************"
-	echo "${blu}Never change these passwords! Read:${end}${dim} https://webinoly.com/documentation/webinolys/#dbpass"
-	echo "${end}"
-}
-
 message_welcome() {
+	# Only displayed once, when pre-pack is installed!
 	echo "${blu}"
 	echo "***************************************************************"
 	echo "*****************   ${bol}Welcome to Webinoly   ${end}${blu}*********************"
@@ -769,7 +835,7 @@ message_welcome() {
 	if [[ $1 =~ ^(full|basic|light|partial)$ ]]; then
 		echo "${dim} -    -    -    -    -    -    -    -    -    -    -    - ${end}${blu}"
 		echo ""
-		[[ $1 == "full" ]] && echo "Build Profile: ${dim}Full Stack (Nginx, PHP, MySQL and ALL the additional tools)"
+		[[ $1 == "full" ]] && echo "Build Profile: ${dim}Full Stack (Nginx, PHP, MySQL/MariaDB and ALL the additional tools)"
 		[[ $1 == "basic" ]] && echo "Build Profile: ${dim}Basic Stack (Only the most essential tools)"
 		[[ $1 == "light" ]] && echo "Build Profile: ${dim}Light Stack (Only core packages, NO additional tools will be installed)"
 		[[ $1 == "partial" ]] && echo "Build Profile: ${dim}Partial Stack"
@@ -800,10 +866,10 @@ stack_builder() {
 		# Set Welcome Message
 		[[ -n $4 ]] && local mess=$4 || local mess="partial" # We trust in build variable validation
 		[[ -n $lemp && -z $4 ]] && local mess="full"
-		message_welcome $mess
+		message_welcome $mess # Only displayed once, when pre-pack is installed!
 		
 		# Any action run after the meesage is displayed!
-		api-events_update i1
+		api-events_update ics
 		sudo apt -qq update
 		
 		# Usually comes by default with Ubuntu. Ensure we have it always! (software-properties-common debconf-utils zip)
@@ -815,11 +881,13 @@ stack_builder() {
 		sudo snap install core
 		sudo snap refresh core
 		
+		linux_optim
 		conf_write pre-packs true
-		api-events_update i2
+		api-events_update ice
 	fi
 	
 	# PPA's
+	api-events_update iks
 	if [[ $1 == "nginx" && $(conf_read nginx) != "true" ]]; then
 		[[ $nginx =~ ^(stable|mainline)$ ]] && conf_write nginx-ppa $nginx
 		[[ $lemp =~ ^(stable|mainline)$ ]] && conf_write nginx-ppa $lemp
@@ -840,7 +908,9 @@ stack_builder() {
 				echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] https://nginx.org/packages/ubuntu/ $(lsb_release -cs) nginx" | sudo tee /etc/apt/sources.list.d/nginx.list
 			fi
 		fi
+		
 		local code="run"
+		api-events_update ikn
 	elif [[ $1 == "nginx" ]]; then
 		echo "${dim}Nginx is already installed!${end}"
 		local code=0
@@ -857,6 +927,7 @@ stack_builder() {
 			echo "deb [signed-by=/usr/share/keyrings/php-archive-keyring.gpg] https://ppa.launchpadcontent.net/ondrej/php/ubuntu $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/php.list
 		fi
 		
+		api-events_update ikp
 		local code="run"
 	elif [[ $2 == "php" ]]; then
 		echo "${dim}PHP is already installed!${end}"
@@ -873,20 +944,25 @@ stack_builder() {
 			echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/redis.list
 		fi
 		
+		api-events_update ikr
 		local code="run"
 	fi
 	
 	if [[ $3 =~ ^(mysql|mysql-client)$ && $(conf_read mysql-client) != "true" ]]; then
-		[[ -n $(conf_read mysql-ver) && $(check_mysql_version $(conf_read mysql-ver)) == "true" ]] || conf_write mysql-ver $mysql_default
-		
-		# REMOVE: when a new LTS is released and jammy supports more than one version.
-		if [[ $(conf_read mysql-ver) != "10.6" && $(lsb_release -c | cut -d':' -f 2 | xargs) == "jammy" ]]; then
-			conf_write mysql-ver 10.6
-			echo "${gre}Force MariaDB 10.6 because is the only LTS version supported in Ubuntu 22.04!${end}"
+		if [[ -n $(conf_read mysql-ver) && $(check_mysql_version $(conf_read mysql-ver)) == "true" ]]; then
+			echo "${blu}Retrieving a saved MySQL/MariaDB version configured before...${dim}${end}"
+		else
+			echo "${blu}Setting the default MySQL/MariaDB version...${dim}${end}"
+			[[ $(conf_read db-engine) == "mysql" ]] && conf_write mysql-ver $mysql_default || conf_write mysql-ver $mariadb_default
 		fi
 		
+		if [[ $(conf_read db-engine) == "mysql" ]]; then
+			[[ ! -s /usr/share/keyrings/mysql-archive-keyring.gpg ]] && sudo rm -rf /usr/share/keyrings/mysql-archive-keyring.gpg # Prevent issues!
+			[[ ! -f /usr/share/keyrings/mysql-archive-keyring.gpg ]] && wget -nv -O- 'https://repo.mysql.com/RPM-GPG-KEY-mysql-2022' | sudo gpg --dearmor -o /usr/share/keyrings/mysql-archive-keyring.gpg
+			echo "deb [signed-by=/usr/share/keyrings/mysql-archive-keyring.gpg] http://repo.mysql.com/apt/ubuntu $(lsb_release -cs) mysql-8.0" | sudo tee /etc/apt/sources.list.d/mysql.list
+		
 		# https://mariadb.org/download/?t=repo-config
-		if [[ $(lsb_release -c | cut -d':' -f 2 | xargs) =~ ^(bionic|focal)$ ]]; then
+		elif [[ $(lsb_release -c | cut -d':' -f 2 | xargs) =~ ^(bionic|focal)$ ]]; then
 			sudo apt-key adv --fetch-keys 'https://mariadb.org/mariadb_release_signing_key.asc'
 			echo | sudo add-apt-repository "deb [arch=amd64,arm64,ppc64el] http://mirrors.syringanetworks.net/mariadb/repo/$(conf_read mysql-ver)/ubuntu $(check_osname) main"
 		else
@@ -894,17 +970,20 @@ stack_builder() {
 			[[ ! -f /usr/share/keyrings/mariadb-archive-keyring.gpg ]] && wget -nv -O- 'https://mariadb.org/mariadb_release_signing_key.asc' | sudo gpg --dearmor -o /usr/share/keyrings/mariadb-archive-keyring.gpg
 			echo "deb [signed-by=/usr/share/keyrings/mariadb-archive-keyring.gpg] http://mirrors.syringanetworks.net/mariadb/repo/$(conf_read mysql-ver)/ubuntu $(check_osname) main" | sudo tee /etc/apt/sources.list.d/mariadb.list
 		fi
+		
+		api-events_update ikm
 		local code="run"
 	elif [[ $3 == "mysql-client" && $(conf_read mysql-client) == "true" ]]; then
-		echo "${dim}MySQL Client is already installed!${end}"
+		echo "${dim}MySQL/MariaDB Client is already installed!${end}"
 		[[ $code != "run" ]] && local code=0
 	elif [[ $3 == "mysql" && $(conf_read mysql) == "true" ]]; then
-		echo "${dim}MySQL is already installed!${end}"
+		echo "${dim}MySQL/MariaDB is already installed!${end}"
 		[[ $code != "run" ]] && local code=0
 	elif [[ $3 == "mysql" && $(conf_read mysql-client) == "true" ]]; then
-		echo "${dim}MySQL Client is already installed!${end}"
+		echo "${dim}MySQL/MariaDB Client is already installed!${end}"
 		local code="run"
 	fi
+	api-events_update ike
 	
 	# Exit before update!
 	# Don't run the "update" if nothing will be installed!
@@ -939,7 +1018,21 @@ stack_builder() {
 		[[ $3 == "mysql-client" && $(conf_read mysql-client) != "true" ]] && mysql_client_install
 		[[ $3 == "mysql" && $(conf_read mysql) != "true" ]] && mysql_client_install && mysql_install && local mysql_pass_display="true" && mysql_optim
 		[[ ( $3 == "mysql" || $4 == "pma" ) && $(conf_read mysql) == "true" && $(conf_read mysql-tool-pma) != "true" ]] && ! [[ $4 =~ ^(light|basic)$ ]] && mysql_tool_pma
-		[[ $mysql_pass_display == "true" && -z $block_password_display ]] && messagend_install
+		
+		# This message is now only for legacy support!
+		# People expects the passwords displayed, so we keep this message to prevent people asking!
+		if [[ $mysql_pass_display == "true" && -z $block_password_display ]]; then
+			echo ""
+			echo "${gre}"
+			echo "****************************************************************************"
+			echo "******${bol}            INSTALLATION HAS FINISHED SUCCESSFULLY              ${end}${gre}******"
+			echo "****************************************************************************"
+			echo "********       MySQL/MariaDB properly configured and secured!       ********"
+			echo "************${dim}         Passwords no longer displayed here.        ${end}${gre}************"
+			echo "****************************************************************************"
+			echo "${blu}For passwords, read:${end}${dim} https://webinoly.com/documentation/webinolys/#dbdata"
+			echo "${end}"
+		fi
 	fi
 	
 	[[ $code != 0 || -n $(conf_read stack-build-error-flag) ]] && sudo webinoly -verify=critical || return 0 # Never end a function with negative open!

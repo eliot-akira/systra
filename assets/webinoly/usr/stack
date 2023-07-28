@@ -22,10 +22,14 @@ if [[ ${purge,,} == "force" || ${purge_server_all,,} == "force" || ${php,,} == "
 fi
 
 purge_mysql_client() {
-	sudo apt -y purge mariadb-client
+	[[ $(conf_read db-engine) == "mysql" ]] && sudo apt -y purge mysql-client || sudo apt -y purge mariadb-client
 	
+	if [[ $(conf_read db-engine) == "mysql" ]]; then
+		sudo rm -rf /etc/apt/trusted.gpg.d/mysql_release_signing_key.asc
+		sudo rm -rf /etc/apt/sources.list.d/mysql.list
+		
 	# APT-KEY deprecated in 22.04
-	if [[ $(lsb_release -c | cut -d':' -f 2 | xargs) =~ ^(bionic|focal)$ ]]; then
+	elif [[ $(lsb_release -c | cut -d':' -f 2 | xargs) =~ ^(bionic|focal)$ ]]; then
 		echo | sudo add-apt-repository --remove "http://mirrors.syringanetworks.net/mariadb/repo/$(conf_read mysql-ver)/ubuntu"
 		sudo apt-key del 0xF1656F24C74CD1D8
 	else
@@ -36,6 +40,20 @@ purge_mysql_client() {
 	conf_write mysql-client purged
 }
 
+purge_nginx_tools() {
+	# Remove additional tools
+	[[ $(conf_read login-www-data) == "true" ]] && webinoly -login-www-data=off
+	[[ $(conf_read nginx-tool-ssl) == "true" ]] && stack -letsencrypt -purge=force
+	[[ $(conf_read nginx-tool-bkp) == "true" ]] && stack -backups -purge=force
+	[[ $(conf_read mysql-tool-pma) == "true" ]] && stack -pma -purge=force
+	
+	[[ -d /var/www ]] && sudo rm -rf /var/www/*
+	[[ -n $(conf_read tools-site) ]] && conf_delete tools-site -commented
+	[[ -n $(conf_read default-response) ]] && conf_delete default-response -commented
+	[[ -n $(conf_read default-site) ]] && conf_delete default-site
+}
+
+
 #############################################
 ########   Delete/Purge some stack   ########
 #############################################
@@ -44,6 +62,14 @@ if [[ -n $purge && ( -n $html || -n $nginx ) ]]; then
 	api-events_update pn1
 	if [[ $(conf_read nginx) != "true" ]]; then
 		echo "${dim}Nginx is not installed, hence can not be deleted! ${end}"
+		purge_nginx_tools # In case of nginx purged with keep-data before.
+		
+		# Just in case, nginx purged with keep-data before can preserve some remanent data, for instance!
+		if [[ -d /etc/nginx ]]; then
+			sudo apt -y purge nginx
+			echo "${gre}${dim}Nginx remanent data found and removed!${end}"
+		fi
+		
 		clear_force_flag
 	else		
 		if [[ $(conf_read force-flag) != "true" ]]; then
@@ -60,7 +86,9 @@ if [[ -n $purge && ( -n $html || -n $nginx ) ]]; then
 		fi
 		
 		if [[ $answer == [Yy] || $(conf_read force-flag) == "true" ]]; then
-			if [[ $(conf_read force-flag) == "true" && $force == 1 ]]; then
+			if [[ $nginx == "keep-data" ]]; then
+				answer="N"
+			elif [[ $(conf_read force-flag) == "true" && $force == 1 ]]; then
 				answer="Y"
 			else
 				echo ""
@@ -75,19 +103,16 @@ if [[ -n $purge && ( -n $html || -n $nginx ) ]]; then
 				site -delete-all=force
 			fi
 			
-			# Remove tools-site
-			[[ $(conf_read mysql-tool-pma) == "true" ]] && stack -pma -purge=force
-			sudo rm -rf /var/www/html
-			sudo rm -rf /var/www/$(conf_read tools-port)
-			conf_delete tools-site -commented
-			
-			[[ $(conf_read login-www-data) == "true" ]] && webinoly -login-www-data=off
-			[[ $(conf_read nginx-tool-ssl) == "true" ]] && stack -letsencrypt -purge=force
-			[[ $(conf_read nginx-tool-bkp) == "true" ]] && stack -backups -purge=force
 			purge_autoremove="true"
-			
 			sudo systemctl stop nginx
-			sudo apt -y purge nginx
+			
+			if [[ $nginx != "keep-data" ]]; then
+				purge_nginx_tools
+				sudo apt -y purge nginx
+			else
+				sudo apt -y remove nginx
+				echo "${blu}Nginx data (including your sites) and configuration was NOT removed.${end}"
+			fi
 			
 			# APT-KEY deprecated in 22.04
 			if [[ $(lsb_release -c | cut -d':' -f 2 | xargs) =~ ^(bionic|focal)$ ]]; then
@@ -102,12 +127,6 @@ if [[ -n $purge && ( -n $html || -n $nginx ) ]]; then
 				sudo rm -rf /etc/apt/sources.list.d/nginx.list
 			fi
 			
-			# Remove SSL Cron
-			if [[ -f /var/spool/cron/crontabs/root ]]; then
-				sudo sed -i '/MAILTO=/d' /var/spool/cron/crontabs/root
-				sudo sed -i '/certbot renew/d' /var/spool/cron/crontabs/root
-			fi
-			
 			[ -L $CURRENT_HOME/www ] && sudo rm $CURRENT_HOME/www
 			[ -L $CURRENT_HOME/sites-available ] && sudo rm $CURRENT_HOME/sites-available
 			
@@ -116,8 +135,6 @@ if [[ -n $purge && ( -n $html || -n $nginx ) ]]; then
 			sudo rm -rf /opt/webinoly/templates/source/nginx.conf
 			
 			api-events_update pn6
-			linux_purge
-			
 			conf_write nginx purged
 			conf_write nginx-optim purged
 			conf_delete server-version
@@ -185,10 +202,10 @@ elif [[ -n $purge && -n $php ]]; then
 			sudo rm -rf /opt/webinoly/templates/source/main.cf
 			
 			# Remove tools-site
-			if [[ -d /var/www/$(conf_read tools-port)/htdocs ]]; then
-				sudo rm -rf /var/www/$(conf_read tools-port)/htdocs/status
-				sudo rm -rf /var/www/$(conf_read tools-port)/htdocs/ping
-				sudo rm -rf /var/www/$(conf_read tools-port)/htdocs/php
+			if [[ -d /var/www/$ADMIN_TOOLS_SITE/htdocs ]]; then
+				sudo rm -rf /var/www/$ADMIN_TOOLS_SITE/htdocs/status
+				sudo rm -rf /var/www/$ADMIN_TOOLS_SITE/htdocs/ping
+				sudo rm -rf /var/www/$ADMIN_TOOLS_SITE/htdocs/php
 			fi
 			
 			conf_write php purged
@@ -211,15 +228,15 @@ elif [[ -n $purge && -n $mysql ]]; then
 	api-events_update pm1
 	if [[ $(conf_read mysql) != "true" && $(conf_read mysql-client) == "true" ]]; then
 		purge_mysql_client
-		echo "${dim}MySQL is not installed, hence can not be deleted! ${end}"
-		echo "${gre}MySQL-Client has been deleted successfully! ${end}"
+		echo "${dim}MySQL/MariaDB is not installed, hence can not be deleted! ${end}"
+		echo "${gre}MySQL/MariaDB Client has been deleted successfully! ${end}"
 	elif [[ $(conf_read mysql) != "true" ]]; then
-		echo "${dim}MySQL is not installed, hence can not be deleted! ${end}"
+		echo "${dim}MySQL/MariaDB is not installed, hence can not be deleted! ${end}"
 	else
 
 		if [[ $(conf_read force-flag) != "true" ]]; then
 			echo ""
-			echo "${red}¡ C A U T I O N !  You are about to remove MySQL from your server! ${end}"
+			echo "${red}¡ C A U T I O N !  You are about to remove MySQL/MariaDB from your server! ${end}"
 			[[ $mysql == "keep-data" ]] && echo "${blu}${bol}The keep-data option is enabled, it is recommended to make a backup of all the databases before removing and reinstalling MySQL (MariaDB).${end}"
 			echo ""
 
@@ -232,28 +249,37 @@ elif [[ -n $purge && -n $mysql ]]; then
 		
 		if [[ $answer == [Yy] || $(conf_read force-flag) == "true" ]]; then
 			[[ $(conf_read mysql-tool-pma) == "true" ]] && stack -pma -purge=force
-			mysqlver=$(conf_read mysql-ver)
 			sudo systemctl stop mysql
-			
-			if [[ $mysql == "keep-data" ]]; then
-				echo "mariadb-server-${mysqlver}	mariadb-server-${mysqlver}/postrm_remove_databases	boolean false" | debconf-set-selections
-			else
-				echo "mariadb-server-${mysqlver}	mariadb-server-${mysqlver}/postrm_remove_databases	boolean true" | debconf-set-selections
-			fi
+			sudo rm -rf /etc/mysql/*.conf.d/* # Prevent warnings when purging packages
 			
 			# Purge is better, instead of remove even when keep-data is enabled, it prevents warnings during reinstallation.
-			sudo apt -y purge mariadb-server mariadb-common mysql-common
-			purge_mysql_client
-			purge_autoremove="true"
-			
-			# APT-KEY deprecated in 22.04
-			if [[ $(lsb_release -c | cut -d':' -f 2 | xargs) =~ ^(bionic|focal)$ ]]; then
-				echo | sudo add-apt-repository --remove "http://mirrors.syringanetworks.net/mariadb/repo/${mysqlver}/ubuntu"
+			if [[ $(conf_read db-engine) == "mysql" ]]; then
+				if [[ $mysql == "keep-data" ]]; then
+					echo "mysql-community-server	mysql-community-server/remove-data-dir  boolean false" | debconf-set-selections
+				else
+					echo "mysql-community-server	mysql-community-server/remove-data-dir  boolean true" | debconf-set-selections
+				fi
+				sudo apt -y purge mysql-server mysql-common mysql-common
+				sudo rm -rf /usr/share/keyrings/mysql-archive-keyring.gpg
+				sudo rm -rf /etc/apt/sources.list.d/mysql.list
 			else
+				mysqlver=$(conf_read mysql-ver)
+				# In 10.11 debconf variables changed!
+				[[ ${mysqlver//.} -lt 1011 ]] && mariadebconf="mariadb-server-${mysqlver}" || mariadebconf="mariadb-server"
+				
+				if [[ $mysql == "keep-data" ]]; then
+					echo "$mariadebconf	$mariadebconf/postrm_remove_databases	boolean false" | debconf-set-selections
+				else
+					echo "$mariadebconf	$mariadebconf/postrm_remove_databases	boolean true" | debconf-set-selections
+				fi
+				sudo apt -y purge mariadb-server mariadb-common mysql-common
 				sudo rm -rf /usr/share/keyrings/mariadb-archive-keyring.gpg
 				sudo rm -rf /etc/apt/sources.list.d/mariadb.list
 			fi
 			
+			purge_mysql_client
+			purge_autoremove="true"
+						
 			if [[ $mysql != "keep-data" ]]; then
 				sudo rm -rf /etc/mysql
 				sudo rm -rf /var/lib/mysql
@@ -261,12 +287,12 @@ elif [[ -n $purge && -n $mysql ]]; then
 				conf_delete mysql-root
 				conf_delete mysql-admin
 			else
-				echo "${blu}MySQL data was not removed.${end}"
+				echo "${blu}MySQL/MariaDB data was not removed.${end}"
 			fi
 			
 			conf_write mysql purged
 			echo ""
-			echo "${gre}MySQL has been deleted successfully! ${end}"
+			echo "${gre}MySQL/MariaDB has been deleted successfully! ${end}"
 			echo ""
 		else
 			echo ""
@@ -297,7 +323,14 @@ elif [[ -n $purge && -n $letsencrypt ]]; then
 		fi
 
 		if [[ $answer == [Yy] || $(conf_read force-flag) == "true" ]]; then
-			sudo snap remove certbot
+			# Remove SSL Cron
+			if [[ -f /var/spool/cron/crontabs/root ]]; then
+				sudo sed -i '/MAILTO=/d' /var/spool/cron/crontabs/root
+				sudo sed -i '/certbot renew/d' /var/spool/cron/crontabs/root
+			fi
+			
+			# To remove a snap without generating a snapshot, use the additional --purge argument
+			sudo snap remove certbot --purge
 			[[ -L /usr/bin/certbot ]] && sudo rm -rf /usr/bin/certbot
 			conf_write nginx-tool-ssl purged
 			echo ""
@@ -338,7 +371,7 @@ elif [[ -n $purge && -n $backups ]]; then
 				echo "${gre}${dim}Backup (duply) profiles deleted!${end}"
 			fi
 			
-			[[ -z $(conf_read bkp-source-tmp) ]] && sudo snap remove duplicity || sudo pip3 uninstall -y duplicity 2>&1 | grep -v "pip as the 'root' user"
+			sudo pip3 uninstall -y duplicity 2>&1 | grep -v "pip as the 'root' user"
 			sudo apt -y purge python3-boto3
 			sudo rm -rf /usr/bin/duply
 			
@@ -505,7 +538,7 @@ elif [[ -n $purge && -n $pma ]]; then
 		fi
 
 		if [[ $answer == [Yy] || $(conf_read force-flag) == "true" ]]; then
-			sudo rm -rf /var/www/$(conf_read tools-port)/htdocs/pma
+			sudo rm -rf /var/www/$ADMIN_TOOLS_SITE/htdocs/pma
 			conf_write mysql-tool-pma purged
 			echo ""
 			echo "${gre}phpMyAdmin has been deleted successfully! ${end}"
@@ -532,7 +565,7 @@ elif [[ -n $purge_server_all ]]; then
 	api-events_update st2
 	echo ""
 	echo "${red}¡ C A U T I O N !  You are about to remove Webinoly Stack completely from your server!"
-	echo "This action will remove Nginx, PHP, MySQL and all the additional tools."
+	echo "This action will remove Nginx, PHP, MySQL/MariaDB and all the additional tools."
 	echo "${end}"
 	if [[ $(conf_read force-flag) != "true" && $force != 1 ]]; then
 		echo " ${blu}Are you sure [y/N]? ${end}"
@@ -568,6 +601,7 @@ elif [[ -n $purge_server_all ]]; then
 		if [[ $(conf_read pre-packs) == true ]]; then
 			# Usually comes by default with Ubuntu. Not removed: software-properties-common, zip
 			sudo apt -y purge pwgen unzip
+			linux_purge
 			conf_write pre-packs purged
 		fi	
 		
@@ -595,7 +629,7 @@ elif [[ -n $html || -n $nginx ]]; then
 	stack_builder nginx false false $build
 	
 elif [[ -n $php ]]; then
-	if [[ $(conf_read nginx) != "true" && $(conf_read force-flag) != "true" && $php != "nginx" ]]; then
+	if [[ $(conf_read php) != "true" && $(conf_read nginx) != "true" && $(conf_read force-flag) != "true" && $php != "nginx" ]]; then
 		echo ""
 		echo "${blu}Nginx is not installed, do you want to install it too [y/N]?${end} "
 		while read -r -n 1 -s answer; do
@@ -681,12 +715,6 @@ elif [[ -n $php_ver ]]; then
 elif [[ -n $mysql_ver ]]; then
 	api-events_update st4
 	
-	# REMOVE: when a new LTS is released and jammy supports more than one version.
-	if [[ $(lsb_release -c | cut -d':' -f 2 | xargs) == "jammy" ]]; then
-		echo "${red}[Disabled] MariaDB 10.6 is the only LTS version supported in Ubuntu 22.04!${end}"
-		exit 1
-	fi
-	
 	if [[ $mysql_ver != true && $(check_mysql_version $mysql_ver) == "true" ]]; then
 		echo "${blu}New MySQL (MariaDB) version: '$mysql_ver' ${end}"
 		if [[ $(conf_read mysql) == "true" && $(conf_read mysql-ver) == $mysql_ver ]]; then
@@ -695,7 +723,7 @@ elif [[ -n $mysql_ver ]]; then
 			# Downgrades are not allowed - https://mariadb.com/kb/en/downgrading-between-major-versions-of-mariadb/
 			current_mysql_ver="$(conf_read mysql-ver)"
 			if [[ -n $current_mysql_ver && ${current_mysql_ver//.} -gt ${mysql_ver//.} ]]; then
-				echo "${red}[ERROR] Downgrading MariaDB is not supported!${end}"
+				echo "${red}[ERROR] Downgrading MySQL/MariaDB is not supported!${end}"
 				exit 1
 			fi
 			

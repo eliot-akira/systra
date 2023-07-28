@@ -104,7 +104,7 @@ elif [[ -n $subfolder && -z $delete && -z $cache && -z $multisite_convert && -z 
 	echo "${red}[ERROR] Subfolder option not supported!${end}"
 	exit 1
 # Clone-from empty is here to allow -cache=on when cloning a site
-elif [[ -n $subfolder && ( $cache == "on" || -n $multisite_convert || -n $replace_content ) && $(is_subfolder $domain $subfolder) != "wp" && -z $clone_from ]]; then
+elif [[ -n $subfolder && -z $wp && ( $cache == "on" || -n $multisite_convert || -n $replace_content ) && $(is_subfolder $domain $subfolder) != "wp" && -z $clone_from ]]; then
 	echo "${red}[ERROR] Subfolder not found or is not a WP site!${end}"
 	exit 1
 else
@@ -217,9 +217,7 @@ elif [[ -n $multisite_convert && -f /etc/nginx/sites-available/$domain ]]; then
 		exit 1
 	fi
 	
-	# We need to call this function in the parent shell to preserve variables and avoid asking two or more times for the same values in case of external db.
-	wp_conf_retrieve $domain true false $subfolder 	
-	
+	wp_conf_retrieve $domain false false $subfolder
 	if [[ $(is_wp_installed $domain $subfolder) != "true" ]]; then
 		echo "${red}[ERROR] WordPress site${blu} $domain$subfolder ${red}is empty and still not configured!${end}"
 		exit 1
@@ -371,14 +369,14 @@ elif [[ -n $clone_from ]]; then
 	fi
 	
 	if [[ $(is_wp $clone_from $subfolder) == "true" ]]; then
-		#We need to call this function in the parent shell to preserve variables and avoid asking two times for the same values in case of external db.
-		wp_conf_retrieve $clone_from true false $subfolder 
+		wp_conf_retrieve $clone_from true false $subfolder
 		iswpclone="true"
 		
-		if [[ -z $wp_dbhost || -z $wp_dbname || -z $wp_dbpref ]]; then
+		if [[ -z $wp_dbhost ||-z $wp_dbhost_host || -z $wp_dbname || -z $wp_dbpref ]]; then
 			echo "${red}[ERROR] Can not retrieve WP data ${dim}(WP Configuration corrupted)!${end}"
 			exit 1
-		elif [[ ( $wp_dbhost == "localhost" && $(check_mysql_connection localhost) != "true" ) || ( $wp_dbhost != "localhost" && $(check_mysql_connection $extdb_url $extdb_port $extdb_user $extdb_pass) != "true" ) ]]; then
+		elif [[ ( $wp_dbhost_host == "localhost" && $(check_mysql_connection localhost $mysql_param) != "true" ) || ( $wp_dbhost_host != "localhost" && $(check_mysql_connection $wp_dbhost_host $wp_dbhost_port any -login-file -master-admin) != "true" ) ]]; then
+			echo "${red}[ERROR] Database connection failed! ${dim}($wp_dbhost)${end}"
 			exit 1
 		elif [[ $(is_wp_multisite $clone_from $subfolder) != "false" ]]; then
 			echo "${red}[ERROR] WordPress Multisite can not be cloned!${end}"
@@ -401,15 +399,7 @@ elif [[ -n $replace_content && -f /etc/nginx/sites-available/$domain ]]; then
 		exit 1
 	fi
 	
-	#We need to call this function in the parent shell to preserve variables and avoid asking two times for the same values in case of external db.
-	wp_conf_retrieve $domain true true $subfolder
-	
-	if [[ $(is_wp_installed $domain $subfolder) != "true" ]]; then
-		echo "${red}[ERROR] WordPress is empty and still not configured in ${domain}${subfolder} site!${end}"
-		exit 1
-	else
-		wp_replace_content
-	fi
+	wp_replace_content
 
 
 # WordPress Environment Type (should be here after cloning site for precedence)
@@ -427,7 +417,7 @@ elif [[ -n $cache && -f /etc/nginx/sites-available/$domain ]]; then
 # Delete site (should be here after cache for precedence)
 elif [[ -n $delete && -f /etc/nginx/sites-available/$domain ]]; then
 	api-events_update si6
-	if [[ $domain == "default" || $domain == $(conf_read tools-port) ]]; then
+	if [[ $domain == "default" || $domain == $ADMIN_TOOLS_SITE ]]; then
 		echo "${red}[ERROR] System sites can not be removed!${end}"
 		exit 1
 	elif [[ -n $subfolder ]]; then
@@ -468,4 +458,5 @@ fi
 
 shopt -u extglob
 [[ $(conf_read nginx) == "true" && -z $nginx_not && $(conf_read nginx-reload) != "false" ]] && sudo systemctl reload nginx
+
 api-events_update sie

@@ -7,6 +7,8 @@ echo "${bol}"
 read -n 1 -s -r -p "Press any key to continue..."
 echo ""
 echo "${end}${dim}This is going to take a little bit of time...${end}"
+conf_write stack-update running
+api-events_update wysus
 sleep 1
 
 
@@ -267,6 +269,74 @@ onesix_to_oneseven() {
 }
 
 
+# v1.17.0
+oneseven_to_oneight() {
+	# We are doing here, not before, just because is now mandatory, WP health is giving messages!!
+	if [[ $(conf_read php) == "true" ]]; then
+		sudo apt update
+		sudo apt -y install php$(conf_read php-ver)-intl
+	fi
+	
+	# Regenerate conf file
+	if [[ -f /opt/webinoly/webinoly.conf ]]; then
+		mv /opt/webinoly/webinoly.conf /opt/webinoly/webinoly.conf.old
+		IFS=$'\n' # FOR loop takes whitespace as a delimiter, so IFS overwrite this.
+		for i in $(grep -E "^([a-z\-]+)\:.*$" /opt/webinoly/webinoly.conf.old)
+		do
+			conf_write $(echo $i | cut -d':' -f 1 -s) $(echo $i | cut -d':' -f 2- -s)
+		done
+	fi
+	
+	# Duplicity: remove snap, instal from pip
+	if [[ $(conf_read nginx-tool-bkp) == "true" && -z $(conf_read bkp-source-tmp) ]]; then
+		sudo snap remove duplicity
+		conf_write nginx-tool-bkp purged
+		stack -backups
+	else
+		conf_delete bkp-source-tmp
+	fi
+	
+	# Loop All Sites
+	for site in "/etc/nginx/sites-available"/*
+	do
+		local domi=$(echo $site | cut -f 5 -d "/")
+		if [[ $domi != "html" && $domi != $(conf_read tools-port) && -f /etc/nginx/sites-available/$domi ]]; then
+			# All sites
+			sed -i "/include \/var\/www\/$domi\/\*-nginx.conf;/a \	include \/etc\/nginx\/conf.d\/\*.conf.srv;" /etc/nginx/sites-available/$domi
+			
+			# Parked: Shared Nginx conf for main site
+			if [[ $(is_parked $domi) == "true" ]]; then
+				local main=$(grep -G "root .*;" /etc/nginx/sites-available/$domi | cut -d'/' -f 4)
+				if [[ -f /etc/nginx/sites-available/$main ]]; then
+					sed -i "/include \/var\/www\/$main\/\*-nginx.conf;/a \	include \/etc\/nginx\/conf.d\/\*.conf.srv;" /etc/nginx/sites-available/$domi
+					sed -i "/include \/var\/www\/${main}\/\*-$(echo $main | sed "s/[^0-9A-Za-z]/_/g")_parked.conf;/d" /etc/nginx/sites-available/$main
+					sed -i "/include \/var\/www\/$main\/\*-nginx.conf;/a \	include \/var\/www\/${main}\/\*-$(echo $main | sed "s/[^0-9A-Za-z]/_/g")_parked.conf;" /etc/nginx/sites-available/$main
+				fi
+			fi
+		fi
+	done
+	
+	# Remove the old kernel method
+	sudo sed -i '/WebinolyStart/,/WebinolyEnd/{/.*/d}' /etc/sysctl.conf
+
+	# New Admin Tools site!
+	if [[ -n $(conf_read tools-port) && -d /var/www/$(conf_read tools-port) && -f /etc/nginx/sites-available/$(conf_read tools-port) ]]; then
+		sudo mkdir -p /var/www/$ADMIN_TOOLS_SITE
+		sudo cp -rp /var/www/$(conf_read tools-port)/* /var/www/$ADMIN_TOOLS_SITE
+		sudo rm -rf /var/www/$(conf_read tools-port)
+		sudo mv /etc/nginx/sites-available/$(conf_read tools-port) /etc/nginx/sites-available/$ADMIN_TOOLS_SITE
+		sudo rm -rf /etc/nginx/sites-enabled/$(conf_read tools-port)
+		sudo ln -s /etc/nginx/sites-available/$ADMIN_TOOLS_SITE /etc/nginx/sites-enabled/$ADMIN_TOOLS_SITE
+		sudo sed -i "s#www/$(conf_read tools-port)/htdocs#www/$ADMIN_TOOLS_SITE/htdocs#g"  /etc/nginx/sites-available/$ADMIN_TOOLS_SITE
+		sudo sed -i "s#$(conf_read tools-port).access.log#${ADMIN_TOOLS_SITE}.access.log#g"  /etc/nginx/sites-available/$ADMIN_TOOLS_SITE
+		sudo sed -i "s#$(conf_read tools-port).error.log#${ADMIN_TOOLS_SITE}.error.log#g"  /etc/nginx/sites-available/$ADMIN_TOOLS_SITE
+		# Fix permissions not needed - it will be done in server-reset later!
+	fi
+	
+}
+
+
+
 # Version numbers without point
 [[ ${oldver//.} -lt 11 ]] && onezero_to_oneone
 [[ ${oldver//.} -lt 12 ]] && oneone_to_onetwo
@@ -275,7 +345,12 @@ onesix_to_oneseven() {
 [[ ${oldver//.} -lt 15 ]] && onefour_to_onefive
 [[ ${oldver//.} -lt 16 ]] && onefive_to_onesix
 [[ ${oldver//.} -lt 17 ]] && onesix_to_oneseven
+[[ ${oldver//.} -lt 18 ]] && oneseven_to_oneight
 
+# Update PIP packages!
+sudo pip3 install --upgrade duplicity 2>&1 | grep -v "pip as the 'root' user"
 
+api-events_update wysue
+conf_delete stack-update
 sudo webinoly -server-reset
 echo "${gre}Your server-configuration has been successfully updated!${end}"

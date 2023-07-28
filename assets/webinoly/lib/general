@@ -4,23 +4,27 @@
 # Prevent 'tput' errors when running from Cron
 [[ -z $TERM || $TERM == "unknown" || $TERM == "dumb" ]] && export TERM=dumb
 
-readonly app_version="1.16.7"
-readonly svr_version="1.7"
+readonly app_version="1.17.4"
+readonly svr_version="1.8"
 readonly os_ubuntu_supported=(bionic focal jammy) # https://ubuntu.com/about/release-cycle
-readonly php_supported=(7.2 7.4 8.0 8.1) # https://www.php.net/supported-versions.php
-readonly php_default="8.0"
-readonly mysql_supported=(10.4 10.5 10.6) # https://mariadb.com/kb/en/mariadb-server-release-dates/
-readonly mysql_default="10.6"
+readonly php_supported=(7.2 7.4 8.0 8.1 8.2) # https://www.php.net/supported-versions.php
+readonly php_default="8.2"
+readonly mariadb_supported=(10.5 10.6 10.11) # https://mariadb.com/kb/en/mariadb-server-release-dates/
+readonly mariadb_default="10.11"
+readonly mysql_supported=(8.0)
+readonly mysql_default="8.0"
 readonly datadog_agent_ver="7"
 readonly tools_port_default="22222"
 
 # echo colors
-readonly red=`tput setaf 1`
-readonly gre=`tput setaf 2`
-readonly blu=`tput setaf 6`
-readonly end=`tput sgr0`
-readonly bol=`tput bold`
-readonly dim=`tput dim`
+readonly red=$(tput setaf 1)
+readonly gre=$(tput setaf 2)
+readonly blu=$(tput setaf 6)
+readonly end=$(tput sgr0)
+readonly bol=$(tput bold)
+readonly dim=$(tput dim)
+readonly hid=$(tput setaf 6)$(tput setab 6)
+readonly hidend=$(tput sgr0)$(tput el)
 
 
 # ***********************************************
@@ -28,8 +32,8 @@ readonly dim=`tput dim`
 # ***********************************************
 
 conf_read() {
-	if [[ ! -f /opt/webinoly/webinoly.conf ]]; then
-		echo "${red}[ERROR] Config file not found!${end}"
+	if [[ ! -f /opt/webinoly/webinoly.conf ]]; then # Double check!
+		echo "${red}[ERROR] Webinoly Configuration file not found!${end}"
 		exit 1
 	fi
 	
@@ -37,8 +41,8 @@ conf_read() {
 }
 
 conf_delete() {
-	if [[ ! -f /opt/webinoly/webinoly.conf ]]; then
-		echo "${red}[ERROR] Config file not found!${end}"
+	if [[ ! -f /opt/webinoly/webinoly.conf ]]; then # Double check!
+		echo "${red}[ERROR] Webinoly Configuration file not found!${end}"
 		exit 1
 	fi
 	
@@ -68,13 +72,13 @@ conf_write() {
 # ***********************************************
 # Useful variables   ****************************
 # ***********************************************
-ADMIN_PASS=$( echo $(conf_read mysql-admin) | openssl enc -d -a -salt )
-[[ -z $ADMIN_PASS ]] && readonly ADMIN_PASS="dUmb" || readonly ADMIN_PASS=$ADMIN_PASS # Never empty, prevent asking password!
 
-# Current original user HOME even with sudo (root) - This script always run with sudo, so $HOME is always /root
-# https://askubuntu.com/questions/1186999/how-does-sudo-handle-home-differently-since-19-10
-readonly CURRENT_HOME=$(eval echo ~${SUDO_USER:-${USER}})
-readonly CURRENT_USER=${SUDO_USER:-${USER}}
+
+# STOP and exit if not root or sudo.
+if [[ $(whoami) != "root" ]]; then
+	echo "${red}Please run this script as root or using sudo.${end}"
+	exit 1
+fi	
 
 # Check for BASH Shell
 # This is a very "shity" method, but checking if file exists is very reliable
@@ -90,10 +94,34 @@ if [[ $(conf_read shell-check) != "false" && -n $(echo $(tty) | grep -Eo "pts/[0
 	fi
 fi
 
-# STOP and exit if not root or sudo.
-if [[ $(whoami) != "root" ]]; then
-	echo "${red}Please run this script as root or using sudo.${end}"
-	exit 1
+# MySQL folder
+if [[ $(conf_read db-engine) == "mysql" ]]; then
+	readonly MYSQL_CONF_PATH="/etc/mysql/mysql.conf.d"
+	readonly MYSQL_CONF_PREF="xx"
+else
+	readonly MYSQL_CONF_PATH="/etc/mysql/mariadb.conf.d"
+	readonly MYSQL_CONF_PREF="90"
+fi
+
+# Current LoggedIn User!
+if [[ -n $(logname) && -d $(eval echo ~$(logname)) ]]; then # You better double check...
+	readonly CURRENT_HOME=$(eval echo ~$(logname))
+	readonly CURRENT_USER=$(logname)
+else
+	readonly CURRENT_HOME="/root"
+	readonly CURRENT_USER="root"
+fi
+
+# Admin Tools Path
+if [[ -n $(conf_read tools-port) && -n $(conf_read tools-site) && -f /etc/nginx/sites-available/$(conf_read tools-site) ]]; then
+	readonly ADMIN_TOOLS_SITE="$(conf_read tools-site):$(conf_read tools-port)"
+else
+	if [[ -n $(conf_read tools-port) ]]; then
+		readonly ADMIN_TOOLS_SITE="default:$(conf_read tools-port)"
+	else
+		# Fresh installation, dynvar is empty!
+		readonly ADMIN_TOOLS_SITE="default:${tools_port_default}"
+	fi
 fi
 
 
@@ -120,10 +148,19 @@ check_php_version() {
 }
 check_mysql_version() {
 	local check="false"
-	for val in "${mysql_supported[@]}"
-	do 
-		[[ $val == $1 ]] && check="true"
-	done
+	
+	# It works for both MySQL and MariaDB!
+	if [[ $(conf_read db-engine) == "mysql" ]]; then
+		for val in "${mysql_supported[@]}"
+		do 
+			[[ $val == $1 ]] && check="true"
+		done
+	else
+		for val in "${mariadb_supported[@]}"
+		do 
+			[[ $val == $1 ]] && check="true"
+		done
+	fi
 	echo $check
 }
 
@@ -261,7 +298,7 @@ check_for_php_tool_redis() {
 check_for_mysql() {
 	if [[ $(conf_read mysql) != "true" && $1 == "-ask" ]]; then
 		echo "${red}"
-		echo "+ MySQL Not Found!"
+		echo "+ MySQL/MariaDB Not Found!"
 		echo "${blu}Do you want to install it now? [y/N]? ${end}"
 		while read -r -n 1 -s answer; do
 			answer=${answer:-n}
@@ -273,64 +310,138 @@ check_for_mysql() {
 	fi
 	
 	if [[ $(conf_read mysql) != "true" ]]; then
-		echo "${red}[ERROR] MySQL is required and not found! ${end}"
+		echo "${red}[ERROR] MySQL/MariaDB is required and not found! ${end}"
 		exit 1
 	fi
 }
 check_for_mysql_client() {
 	if [[ $(conf_read mysql-client) != "true" ]]; then
-		echo "${gre}${dim}MySQL Client is not installed and we need it to stablish a connection with your external server.${end}" >&2
-		echo "${dim}Wait while we install MySQL Client...${end}" >&2
+		echo "${gre}${dim}MySQL/MariaDB Client is not installed and we need it to stablish a connection with your external server.${end}" >&2
+		echo "${dim}Wait while we install MySQL/MariaDB Client...${end}" >&2
 		sudo stack -mysql=client > /dev/null 2>&1 &
 		wait $!
-		echo "${gre}MySQL Client has been successfully installed!${end}" >&2
+		echo "${gre}MySQL/MariaDB Client has been successfully installed!${end}" >&2
 	fi
 }
 
 
 check_mysql_connection() {
+	# Examples for admin connection:
+	# Localhost: $(check_mysql_connection localhost)
+	# Unix socket: $(check_mysql_connection localhost /var/run/mysqld/mysqld.sock)
+	# Custom port: $(check_mysql_connection localhost 3307)
+	# External DB: $(check_mysql_connection $dburl $dbport $dburoot $dbproot)
+	# External DB if login group exist: $(check_mysql_connection $dburl $dbport $dburoot -login-file)
+	# External DB if login group exist and is master-admin: $(check_mysql_connection $dburl $dbport any -login-file -master-admin)
+	# External DB check and save it as master-admin: $(check_mysql_connection $dburl $dbport $dburoot $dbproot -master-admin)
+	
+	# Examples for especific User connection:
+	# Localhost: $(check_mysql_connection localhost $wp_dbuser $wp_dbpass)
+	# Unix socket: $(check_mysql_connection localhost $wp_dbuser $wp_dbpass /var/run/mysqld/mysqld.sock)
+	# Custom port: $(check_mysql_connection localhost $wp_dbuser $wp_dbpass 3307)
+	# External DB: $(check_mysql_connection $extdb_url $extdb_port $wp_dbuser $wp_dbpass)
+	# External DB if login group exist: $(check_mysql_connection $extdb_url $extdb_port $wp_dbuser -login-file)
+	# External DB if login group exist and is master-admin: $(check_mysql_connection $extdb_url $extdb_port any -login-file -master-admin)
+	# External DB check and save it as master-admin: $(check_mysql_connection $extdb_url $extdb_port $wp_dbuser $wp_dbpass -master-admin)
+	
+	# Examples for especific DBname/User connection:
+	# Note: Error message is not displayed!
+	# Localhost: $(check_mysql_connection localhost $wp_dbuser $wp_dbpass $wp_dbname)
+	# Unix socket: $(check_mysql_connection localhost $wp_dbuser $wp_dbpass $wp_dbname /var/run/mysqld/mysqld.sock)
+	# Custom port: $(check_mysql_connection localhost $wp_dbuser $wp_dbpass $wp_dbname 3307)
+	# External DB: $(check_mysql_connection $extdb_url $extdb_port $wp_dbuser $wp_dbpass $wp_dbname)
+	# External DB if login group exist: $(check_mysql_connection $extdb_url $extdb_port $wp_dbuser -login-file $wp_dbname)
+	# Master-admin not needed here for specific dbs.
+	
+	# Note: You can always use the dynvar 'quiet' set to 'true' to not display messages.
+	# In this especific case ONLY, there is a third value: false, true and truebutnotmaster (External DB connection successfull but not enough privileges for master-admin)
+	
 	local query="quit"
-
-	if [[ -n $1 && ${1,,} != "localhost" && -n $2 && -n $3 && -n $4 ]]; then
+	local error_display="true"
+	
+	if [[ -n $1 && ${1,,} != "localhost" && $(is_url $1) =~ ^(http|https|true|http\+ip|https\+ip|ip)$ && -n $2 && -n $3 && -n $4 ]]; then
 		check_for_mysql_client
-		[[ -n $5 ]] && local query="use $5"
-		sudo mysql --connect-timeout=10 -h "$1" -P "$2" -u"$3" -p"$4" -e "$query"
-		if [[ $? != "0" ]]; then
-			echo "${red}============================================" >&2
-			echo "    [Error]  Database conection failed." >&2
-			echo "============================================${end}" >&2
-			echo "" >&2
-			echo "false"
-		else
-			echo "true"
-		fi
-	elif [[ ${1,,} == "localhost" && $(conf_read mysql) == "true" ]]; then
-		# In case of custom DB user
-		if [[ -n $2 && -n $3 ]]; then
-			local dbu=$2
-			local dbp=$3
-			[[ -n $4 ]] && local query="use $4"
-		else
-			local dbu="admin"
-			local dbp=$ADMIN_PASS
+		local suffix_group_name="${1}:${2}_${3}"
+		local user_param="-u${3}"
+		
+		if [[ -n $5 && $5 == "-master-admin" ]]; then
+			# 'default' is a reserved word, real usernames should never use it, it's possible, but not practical!
+			local suffix_group_name="${1}:${2}_default"
+		elif [[ -n $5 ]]; then
+			local query="use $5"
+			local error_display="false"
 		fi
 		
-		sudo mysql --connect-timeout=10 --user=$dbu -p$dbp -e "$query"
-		if [[ $? != "0" ]]; then
-			echo "${red}============================================" >&2
-			echo "    [Error]  Database conection failed." >&2
-			echo "============================================${end}" >&2
-			echo "" >&2
-			echo "false"
+		# Create or update the login file
+		if [[ $4 != "-login-file" ]]; then
+			mysql_login_cnf
+			sudo sed -i "/\[client_${suffix_group_name}\]/,/# ClientEnd/{/.*/d}" $MYSQL_CONF_PATH/${MYSQL_CONF_PREF}-webinoly-login.cnf
+			echo "[client_${suffix_group_name}]
+host = $1
+port = $2
+user = $3
+password = $4
+# ClientEnd" >> $MYSQL_CONF_PATH/${MYSQL_CONF_PREF}-webinoly-login.cnf
 		else
-			echo "true"
+			[[ $5 == "-master-admin" ]] && unset user_param # take the user from the login group!
+			local error_display="false"
+		fi
+		
+		# Just for the record: We don't use the 'mysql_conf_editor' just because it can not be unattended :(
+		# --defaults-group-suffix should always be at the beginning, otherwise it fails.
+		sudo mysql --defaults-group-suffix=_${suffix_group_name} --connect-timeout=10 -h "$1" -P "$2" $user_param -e "$query" 2>/dev/null
+		if [[ $? != "0" ]]; then
+			local out="false"
+			[[ -f $MYSQL_CONF_PATH/${MYSQL_CONF_PREF}-webinoly-login.cnf ]] && sudo sed -i "/\[client_${suffix_group_name}\]/,/# ClientEnd/{/.*/d}" $MYSQL_CONF_PATH/${MYSQL_CONF_PREF}-webinoly-login.cnf
+		else
+			# Display a warning message when not enough privileges!
+			if [[ $5 == "-master-admin" ]]; then
+				local priv=$(sudo mysql --defaults-group-suffix=_${suffix_group_name} --connect-timeout=10 -h "$1" -P "$2" -e "SHOW GRANTS FOR CURRENT_USER();")
+				if ! [[ -n $(echo $priv | grep -Fo "WITH GRANT OPTION") && ( -n $(echo $priv | grep -Fo "GRANT ALL PRIVILEGES") || ( -n $(echo $priv | grep -Fo "CREATE USER") && -n $(echo $priv | grep -Fo "ALTER"))) ]]; then
+					if [[ $(conf_read quiet) != "true" ]]; then
+						echo "${red}${dim}[WARNING] Seems like '$(echo $priv | grep -oP -m 1 'Grants for \K\w+')' is not a Master user!${end}" >&2
+					else
+						local master_priv="false"
+					fi
+				fi
+			fi
+		fi 
+	elif [[ ${1,,} == "localhost" && $(conf_read mysql) == "true" ]]; then
+		if [[ -n $2 && -n $3 ]]; then
+			if [[ -S $4 ]]; then
+				local mysql_params="-S${4}"
+			elif [[ $4 =~ ^[0-9]+$ && $4 -ge 0 && $4 -le 65535 ]]; then
+				local mysql_params=(-P${4} --protocol=TCP)
+			elif [[ -n $4 ]]; then
+				local query="use $4"
+				[[ -S $5 ]] && local mysql_params="-S${5}"
+				[[ $5 =~ ^[0-9]+$ && $5 -ge 0 && $5 -le 65535 ]] && local mysql_params=(-P${5} --protocol=TCP)
+			fi
+			# We need the protocol socket fixed to prevent warnings when custom port is used.
+			sudo mysql --connect-timeout=10 --user=$2 -p$3 -e "$query" "${mysql_params[@]}" 2>/dev/null
+			[[ $? != "0" ]] && local out="false"
+			local error_display="false"
+		else
+			# In case of Unix socket or localhost with custom port
+			[[ -S $2 ]] && local mysql_params="-S${2}"
+			[[ $2 =~ ^[0-9]+$ && $2 -ge 0 && $2 -le 65535 ]] && local mysql_params=(-P${2} --protocol=TCP)
+			sudo mysql --connect-timeout=10 --user=admin -e "$query" "${mysql_params[@]}" 2>/dev/null
+			[[ $? != "0" ]] && local out="false"
 		fi
 	else
-		echo "${red}============================================" >&2
-		echo "    [Error]  Database conection failed." >&2
-		echo "============================================${end}" >&2
+		local out="false"
+	fi
+	
+	if [[ $out == "false" && $error_display != "false" && $(conf_read quiet) != "true" ]]; then
+		echo "${red}===================================================" >&2
+		echo "    [Error]  Database conection failed! (${1})" >&2
+		echo "===================================================${end}" >&2
 		echo "" >&2
 		echo "false"
+	elif [[ $out == "false" ]]; then
+		echo "false"
+	else
+		[[ $master_priv == "false" ]] && echo "truebutnotmaster" || echo "true"
 	fi
 }
 
@@ -338,7 +449,7 @@ check_mysql_connection() {
 check_external_db_saved() {
 	if [[ -n $(conf_read external-dbh) && -n $(conf_read external-dbu) && -n $(conf_read external-dbp) && -n $(conf_read external-dbx) ]]; then
 		external_db="[$(conf_read external-dbu),$(conf_read external-dbp),$(conf_read external-dbh):$(conf_read external-dbx)]"
-		[[ $(conf_read quiet) != "true" ]] && echo "${blu}${dim}External DB credentials found!${end}" >&2
+		[[ $(conf_read quiet) != "true" ]] && echo "${blu}${dim}External DB credentials found in your saved configuration!${end}" >&2
 	fi
 }
 
@@ -367,7 +478,7 @@ external_db_parse() {
 			return
 		fi
 		
-		if [[ $(check_mysql_connection $url $port $user $pass) != "true" ]]; then
+		if [[ $(check_mysql_connection $url $port $user $pass -master-admin) != "true" ]]; then
 			echo "${red}[ERROR] Cannot connect with your External Database!${end}"
 			return
 		else
@@ -451,9 +562,25 @@ wp_conf_retrieve() {
 	# wp_conf_retrieve example.com
 	# wp_conf_retrieve example.com false false /subfolder
 	# $1 is domain
-	# $2 set to false if you want to skip external_db questions.
+	# $2 set to false if you want to skip external_db questions. ONLY NEEDED (true) when you need master-admin privileges for your DB queries!
 	# $3 set to false if you want to disable WP Domain Mapping check (wp_pref will be for the main site when disabled, wp_ instead of wp_3_).
 	# $4 is subfolder
+	
+	# Prevent unwanted values when called multiple times
+	unset wp_config
+	unset wp_dbname
+	unset wp_dbuser
+	unset wp_dbhost
+	unset wp_dbpass
+	unset wp_dbpref
+	unset wp_dbhost_host
+	unset wp_dbhost_port
+	unset wp_dbhost_socket
+	unset wp_dbpref_main
+	unset wp_blogid
+	unset mysql_params
+	unset mysql_param
+	
 	
 	wp_config=$(wp_config_path $1 $4)
 	# Just in case: We should always check is_wp before calling this function
@@ -468,42 +595,89 @@ wp_conf_retrieve() {
 	wp_dbhost=$( wp_config_read $1 DB_HOST $4 )
 	wp_dbpass=$( wp_config_read $1 DB_PASSWORD $4 )
 	wp_dbpref=$( grep -F "table_prefix" $wp_config | cut -f 2 -d "'" -s)
-	wp_extdb_url=$(echo "$wp_dbhost" | cut -f 1 -d ':')
-	wp_extdb_port=$(echo "$wp_dbhost" | cut -f 2 -d ':' -s)
+	
+	# wp_dbhost - Always contains the complete string
+	# wp_dbhost_host - Only the host part
+	# wp_dbhost_port - Only the port part (default: 3306)
+	# wp_dbhost_socket - Only the socket path if exist (default: empty)
+	
+	# Example: localhost:3307 (host: localhost, port:3307)
+	# Example: localhost:/var/run/mysqld/mysqld.sock (host: localhost, socket:/var/run/mysqld/mysqld.sock)
+	# Example: mysql.example.com:3306 (host: mysql.example.com, port:3307)
+	
+	wp_dbhost_host=$(echo "$wp_dbhost" | cut -f 1 -d ':')
+	local host_pars=$(echo "$wp_dbhost" | cut -f 2 -d ':' -s)
+	if [[ $host_pars =~ ^[0-9]+$ && $host_pars -ge 0 && $host_pars -le 65535 ]]; then
+		wp_dbhost_port=$host_pars
+		mysql_params=(-P${wp_dbhost_port} --protocol=TCP) # Array because it fails to split the args in MySQL http://mywiki.wooledge.org/BashFAQ/050
+		mysql_param="$wp_dbhost_port"
+	elif [[ -S $host_pars ]]; then
+		wp_dbhost_socket=$host_pars
+		mysql_params="-S${wp_dbhost_socket}"
+		mysql_param="$wp_dbhost_socket"
+	else
+		wp_dbhost_host=$wp_dbhost
+	fi
 	
 	wp_dbpref_main=${wp_dbpref} # In case of domain mapping this variable always remains with the main site info
 	
 	[[ ${wp_dbhost,,} == "localhost" ]] && wp_dbhost=${wp_dbhost,,}
-	[[ -z $wp_extdb_port ]] && wp_extdb_port="3306"
+	#[[ -z $wp_dbhost_port ]] && wp_dbhost_port="3306"
 	
 	
-	if [[ $2 != "false" ]]; then
-		if [[ -z $external_db && -n $wp_dbhost && $wp_dbhost != "localhost" && $wp_dbhost == "$(conf_read external-dbh):$(conf_read external-dbx)" ]]; then
-			check_external_db_saved
-		elif [[ -z $external_db && -n $wp_dbhost && $wp_dbhost != "localhost" && -n $(conf_read external-dbh) && $wp_dbhost != "$(conf_read external-dbh):$(conf_read external-dbx)" ]]; then
-			echo "${dim}[INFO] External Database saved credentials found, but we cannot use it because not the same host!${end}" >&2
-		fi
-		
-		if [[ -n $external_db ]]; then
-			external_db_parse
-			if [[ $wp_dbhost != $extdb_host ]]; then
-				unset external_db
-				unset extdb_user
-				unset extdb_pass
-				unset extdb_host
-				unset extdb_url
-				unset extdb_port
+	# Only used when External DB and Master-Admin privileges are required!
+	# Example: Cloning site because its needed to create new dbs and users.
+	# Example: Delete site because its required to drop users.
+	if [[ $2 != "false" && $wp_dbhost_host != "localhost" && -z $wp_dbhost_socket && $(is_url $wp_dbhost) =~ ^(http|https|true|http\+ip|https\+ip|ip)$ ]]; then
+		# Don't needed if already exist a login-file with master-admin privileges!
+		# -external-db have priority, mainly to rewrite or update old/wrong credentials.
+		if [[ -n $external_db || $(check_mysql_connection $wp_dbhost_host $wp_dbhost_port any -login-file -master-admin) != "true" ]]; then
+			if [[ -z $external_db && -n $(conf_read external-dbh) && -n $(conf_read external-dbx) && $wp_dbhost == "$(conf_read external-dbh):$(conf_read external-dbx)" ]]; then
+				check_external_db_saved
+			elif [[ -z $external_db && -n $(conf_read external-dbh) ]]; then
+				echo "${dim}[INFO] External Database saved credentials found, but we cannot use it because not the same host!${end}" >&2
 			fi
-		fi
-		if [[ -z $external_db && -n $wp_dbhost && $wp_dbhost != "localhost" ]]; then
-			echo "" >&2
-			echo "${gre}External DB${blu} '${wp_dbhost}' ${gre}found in:${blu}${dim} ${1}${4} ${end}" >&2
-			read -p "${blu}External DB username: ${end}" extdb_user
-			read -p "${blu}External DB password: ${end}" extdb_pass
+			
+			if [[ -n $external_db ]]; then
+				external_db_parse
+				if [[ $wp_dbhost != $extdb_host ]]; then
+					unset external_db
+					unset extdb_user
+					unset extdb_pass
+					unset extdb_host
+					unset extdb_url
+					unset extdb_port
+					echo "${red}${dim}[ERROR] External DB credentials cannot be used! (host mismatch)${end}"
+				fi
+			fi
+			if [[ -z $external_db ]]; then
+				local done="0"
+				while [[ $done -lt "3" ]]
+				do
+					echo "" >&2
+					echo "${gre}External DB${blu} '${wp_dbhost}' ${gre}found in:${blu}${dim} ${1}${4} ${end}" >&2
+					read -p "${blu}External DB Master Username: ${end}" extdb_user
+					read -p "${blu}External DB password: ${hid}" extdb_pass
+					echo "${hidend}"
+					if [[ $(check_mysql_connection $wp_dbhost_host $wp_dbhost_port $extdb_user $extdb_pass -master-admin) == "true" ]]; then
+						extdb_host=$wp_dbhost
+						extdb_url=$wp_dbhost_host
+						extdb_port=$wp_dbhost_port
+						external_db="[${extdb_user},${extdb_pass},${extdb_host}]"
+						break
+					fi
+					local done=$(($done+1))
+				done
+			fi
+		else
+			# We always need these variables for non-WP sites!
+			unset external_db
+			unset extdb_user
+			unset extdb_pass
 			extdb_host=$wp_dbhost
-			extdb_url=$wp_extdb_url
-			extdb_port=$wp_extdb_port
-			external_db="[${extdb_user},${extdb_pass},${extdb_host}]"
+			extdb_url=$wp_dbhost_host
+			extdb_port=$wp_dbhost_port
+			echo "${blu}${dim}External DB Credentials found!${end}" >&2
 		fi
 	fi
 	
@@ -520,11 +694,10 @@ wp_conf_retrieve() {
 		
 		if [[ $(is_wp_multisite $maindom $4) =~ ^(subdomain|subdirectory)$ ]]; then
 			local dbq="USE $wp_dbname; SELECT blog_id FROM ${wp_dbpref}blogs WHERE domain='$1' OR domain='www.$1';"
-			
-			if [[ $wp_dbhost == "localhost" && $(check_mysql_connection localhost) == "true" ]]; then
-				local bid=$(sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS -e "$dbq")
-			elif [[ $(check_mysql_connection $extdb_url $extdb_port $extdb_user $extdb_pass) == "true" ]]; then
-				local bid=$(sudo mysql --connect-timeout=10 -h "$extdb_url" -P "$extdb_port" -u"$extdb_user" -p"$extdb_pass" -e "$dbq")
+			if [[ $wp_dbhost_host == "localhost" && $(check_mysql_connection localhost $mysql_param) == "true" ]]; then
+				local bid=$(sudo mysql --connect-timeout=10 --user=admin -e "$dbq" "${mysql_params[@]}")
+			elif [[ $(check_mysql_connection $wp_dbhost_host $wp_dbhost_port $wp_dbuser $wp_dbpass) == "true" ]]; then
+				local bid=$(sudo mysql --defaults-group-suffix=_${wp_dbhost_host}:${wp_dbhost_port}_${wp_dbuser} --connect-timeout=10 -h "$wp_dbhost_host" -P "$wp_dbhost_port" -u"$wp_dbuser" -e "$dbq")
 			fi
 			
 			wp_blogid=$(echo $bid | cut -f 2 -d " " -s)
@@ -570,16 +743,26 @@ remove_nginx_default_server() {
 
 
 check_for_parameters() {
-	# Global variables: domain, tld, subdomain, main_domain, sub_domain, empty_param
+	# Global variables: domain, domain_name, domain_port, tld, subdomain, main_domain, sub_domain, empty_param
+	# Note: domain and domain_name are the same except when port is present (example.com:22), then port is removed from domain_name (example.com)
 	
 	# Check for domain parameter if is first parameter and have no hyphen at the begining.
 	if [[ -n $1 && $(echo $1 | cut -c-1) != "-" ]]; then
 		domain=$1
+		domain_name=$1
 		shift
+		
+		# Check for port and remove it!
+		domain_port=$(echo $domain | cut -d':' -f 2- -s)
+		if [[ $domain_port =~ ^[0-9]+$ && $domain_port -ge 0 && $domain_port -le 65535 ]]; then
+			domain_name=$(echo $domain | cut -d':' -f 1 -s)
+		else
+			unset domain_port
+		fi
 		
 		local count=1
 		while true; do
-			tld=$(echo $domain | cut -d'.' -f ${count}- -s)
+			tld=$(echo $domain_name | cut -d'.' -f ${count}- -s)
 			if grep -Fxq "$tld" /opt/webinoly/lib/public_suffix_list.dat || [ -z $tld ]; then
 				break
 			fi
@@ -588,8 +771,8 @@ check_for_parameters() {
 		[[ $count -gt 2 ]] && subdomain="true" || subdomain="false"
 		
 		if [[ $subdomain == "true" && -n $tld ]]; then
-			main_domain=$(echo $domain | cut -d'.' -f $[$count-1]- -s)
-			sub_domain=$(echo $domain | cut -d'.' -f -$[$count-2] -s)
+			main_domain=$(echo $domain_name | cut -d'.' -f $[$count-1]- -s)
+			sub_domain=$(echo $domain_name | cut -d'.' -f -$[$count-2] -s)
 		fi
 	fi
 	
@@ -597,7 +780,7 @@ check_for_parameters() {
 		local check=$(echo "${arg}" | cut -c-1)
 		local arg=${arg:1}
 		local par=$(echo "${arg}" | cut -d'=' -f 1 -s)
-		local val=$(echo "${arg}" | cut -d'=' -f 2 -s)
+		local val=$(echo "${arg}" | cut -d'=' -f 2- -s)
 		[[ -z $par ]] && par=$arg
 		[[ -z $val ]] && val=true
 		
@@ -656,6 +839,7 @@ is_domain() {
 
 is_url_path() {
 	# Should start with / and after that all should be valid characters.
+	# https://stackoverflow.com/questions/4669692/valid-characters-for-directory-part-of-a-url-for-short-links
 	if [[ -n $1 && $1 =~ ^\/([\]A-Za-z0-9_\/\.:\!\*\'\[\(\)\;@\&\=\+\$\,\?#\~\%\-]+)?$ ]]; then
 		echo "true"
 	else
@@ -665,59 +849,114 @@ is_url_path() {
 
 
 is_url() {
-	# Output: http,https,ip,unix,true,false  Example: $(is_url $domain)
-	# Global variables when -split is set: url_scheme, url_host, url_path, url_port    Example: is_url $domain -split
+	# Output: http,https,true,http+ip,https+ip,ip,http+unix,https+unix,unix,false - Example: $(is_url $domain)
+	# Global variables when -split is set: url_type, url_scheme, url_host, url_path, url_port  -  Example: is_url $domain -split
 	
+	# Examples:
+	# example.com -> true
+	# http://example.com -> http
+	# https://example.com -> https
+	# 1.1.1.1 -> ip
+	# http://1.1.1.1 -> http+ip
+	# https://1.1.1.1 -> https+ip
+	# unix:/tmp/backend.socket:/uri/ -> unix
+	# http://unix:/tmp/backend.socket:/uri/ -> http+unix
+	# https://unix:/tmp/backend.socket:/uri/ -> https+unix
+	
+	# Unix sockets are mainly used in upstream and proxy_pass
+	# http://nginx.org/en/docs/http/ngx_http_upstream_module.html#upstream
+	# http://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_pass
+	
+	# Important, because they can have a previous value when runs multiple times.
+	unset url_scheme
+	unset url_host
+	unset url_path
+	unset url_port
+	unset url_type
+	
+	# Here we are assuming URL with scheme
 	local scheme=$(echo "${1,,}" | cut -d':' -f 1 -s)
-	local host=$(echo "${1,,}" | cut -d':' -f 2 -s | cut -d'/' -f 3 -s)
-	local path=$(echo "${1,,}" | cut -d':' -f 2- -s | cut -d'/' -f 4- -s)
-	local port=$(echo "${1,,}" | cut -d':' -f 3 -s | cut -d'/' -f 1 )
+	local host=$(echo "${1,,}" | cut -d'/' -f 3 -s)
+	[[ $(echo $host | cut -d':' -f 2 -s) =~ ^[0-9]+$ ]] && local host=$(echo $host | cut -d':' -f 1) # We need this 2dn step to prevent http://example.com:/tmp (empty port)
+	local path=$(echo "${1,,}" | cut -d'/' -f 4- -s)
+	local port=$(echo "${1,,}" | cut -d'/' -f 3 -s | cut -d':' -f 2 -s)
 	local out="false"
 	
-	# In case of no-scheme format
+	# In case of URL with no-scheme
 	local hosted=$(echo "${1,,}" | cut -d'/' -f 1)
-	# In case of no-scheme have port included
 	[[ $(echo $hosted | cut -d':' -f 2 -s) =~ ^[0-9]+$ ]] && hosted=$(echo $hosted | cut -d':' -f 1)
 	
-	if [[ $1 =~ ^((http|https)+\:\/\/)?unix:(.+):(\/.*)?$ ]]; then
-		out="unix"
-		[[ $scheme == "unix" ]] && local host=$(echo "${1,,}" | cut -d':' -f 2 -s) || local host=$(echo "${1,,}" | cut -d':' -f 3 -s)
-		local path=$(echo "${1,,}" | rev | cut -d':' -f 1 -s | rev | cut -d '/' -f 2- -s)
-		local port=""
+	if [[ $1 =~ ^((http|https)+\:\/\/)?unix:\/[^\:]+(:\/.*)?$ ]]; then
+		unset port
+		if [[ $scheme == "unix" ]]; then
+			local host="$(echo "${1,,}" | cut -d':' -f 1-2 -s)"
+			local path=$(echo "${1,,}" | cut -d':' -f 3- -s)
+			local out="unix"
+			unset scheme
+		else
+			local host="$(echo "${1,,}" | cut -d':' -f 2-3 -s)"
+			local host=${host:2}
+			local path=$(echo "${1,,}" | cut -d':' -f 4- -s)
+			local out="${scheme}+unix"
+		fi
 	elif [[ $scheme =~ ^(http|https)$ ]]; then	
 		if [[ $(is_domain $host) != "true" && $(is_ip $host) != "true" ]]; then
-			out="false"
+			local out="false"
 		elif [[ -n $path && $(is_url_path /$path) != "true" ]]; then
-			out="false"
+			local out="false"
 		elif [[ -n $port ]] && ! [[ $port =~ ^[0-9]+$ && $port -ge 0 && $port -le 65535 ]]; then
-			out="false"
+			local out="false"
+		elif [[ $(is_ip $host) == "true" ]]; then
+			local out="${scheme}+ip"
 		else
-			out=$scheme
+			local out="${scheme}"
 		fi
 	elif [[ $(is_domain $hosted) == "true" || $(is_ip $hosted) == "true" ]]; then
-		scheme=""
-		host=$hosted
-		path=$(echo "${1,,}" | cut -d'/' -f 2- -s)
-		port=$(echo "${1,,}" | cut -d'/' -f 1 | cut -d':' -f 2 -s)
+		local scheme=""
+		local host=$hosted
+		local path=$(echo "${1,,}" | cut -d'/' -f 2- -s)
+		local port=$(echo "${1,,}" | cut -d'/' -f 1 | cut -d':' -f 2 -s)
 		
 		if [[ -n $path && $(is_url_path /$path) != "true" ]]; then
-			out="false"
+			local out="false"
 		elif [[ -n $port ]] && ! [[ $port =~ ^[0-9]+$ && $port -ge 0 && $port -le 65535 ]]; then
-			out="false"
+			local out="false"
 		elif [[ $(is_ip $hosted) == "true" ]]; then
-			out="ip"		
+			local out="ip"
 		else
-			out="true"
+			local out="true"
 		fi
 	else
-		out="false"
+		local out="false"
 	fi
 	
+	# If path doesn't begin with /, then add it!
+	# If there is no path, but the url ends with /, then / is a valid path, so show it as path!
+	[[ ( -n $path && $(echo "$path" | cut -c-1) != "/" ) || ( -z $path && $(echo "${1}" | rev | cut -c-1) == "/" ) ]] && local path="/$path"
+	[[ -n $path && $out =~ ^(unix|http\+unix|https\+unix)$ ]] && local path=":${path}"
+	
+	
+	# Final validation, just because we need to be really sure! (double check!!)
+	if [[ -n $scheme && -n $host && -n $port ]]; then
+		local url_final="${scheme}://${host}:${port}${path}"
+	elif [[ -z $scheme && -n $host && -n $port ]]; then
+		local url_final="${host}:${port}${path}"
+	elif [[ -n $scheme && -n $host && -z $port ]]; then
+		local url_final="${scheme}://${host}${path}"
+	elif [[ -z $scheme && -n $host && -z $port ]]; then
+		local url_final="${host}${path}"
+	fi
+	
+	[[ $url_final != ${1,,} ]] && out="false" # SHORT CIRCUIT!!!
+
+
+	# Final output!
 	if [[ $2 == "-split" && $out != "false" ]]; then
-		url_scheme=$scheme
-		url_host=$host
-		[[ -n $path || $(echo "${1}" | rev | cut -c-1) == "/" ]] && url_path="/$path" # Check if / is alone, it's also a valid path!
-		url_port=$port
+		[[ -n $scheme ]] && url_scheme=$scheme
+		[[ -n $path ]] && url_path=$path
+		[[ -n $port ]] && url_port=$port
+		url_host=$host # We are very sure these two vars are never empty! ;)
+		url_type=$out # empty/unset when false
 	elif [[ $2 != "-split" ]]; then
 		echo $out
 	fi
@@ -836,17 +1075,17 @@ is_cache() {
 
 is_wp_multisite() {
 	if [[ $(is_wp $1 $2) == "true" ]]; then
-		wp_conf_retrieve $1 true false $2 # 3th parameter should always be 'false' to prevent an infinite loop!
-		if [[ -n $wp_dbhost && -n $wp_dbname && -n $wp_dbpref ]]; then
+		wp_conf_retrieve $1 false false $2 # 3th parameter should always be 'false' to prevent an infinite loop!
+		if [[ -n $wp_dbhost_host && -n $wp_dbname && -n $wp_dbpref ]]; then
 			local dbsetup="SELECT * FROM information_schema.tables WHERE table_schema = '$wp_dbname' AND table_name = '${wp_dbpref}sitemeta' LIMIT 1;"
 			local dbsetuc="USE $wp_dbname; SELECT meta_value FROM ${wp_dbpref}sitemeta where meta_key='subdomain_install';"
 			
-			if [[ $wp_dbhost == "localhost" && $(check_mysql_connection localhost) == "true" ]]; then
-				wpmu=$(sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS -e "$dbsetup")
-				[[ -n $wpmu ]] && mutype=$(sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS -e "$dbsetuc")
-			elif [[ $(check_mysql_connection $extdb_url $extdb_port $extdb_user $extdb_pass) == "true" ]]; then
-				wpmu=$(sudo mysql --connect-timeout=10 -h "$extdb_url" -P "$extdb_port" -u"$extdb_user" -p"$extdb_pass" -e "$dbsetup")
-				[[ -n $wpmu ]] && mutype=$(sudo mysql --connect-timeout=10 -h "$extdb_url" -P "$extdb_port" -u"$extdb_user" -p"$extdb_pass" -e "$dbsetuc")
+			if [[ $wp_dbhost_host == "localhost" && $(check_mysql_connection localhost $mysql_param) == "true" ]]; then
+				wpmu=$(sudo mysql --connect-timeout=10 --user=admin -e "$dbsetup" "${mysql_params[@]}")
+				[[ -n $wpmu ]] && mutype=$(sudo mysql --connect-timeout=10 --user=admin -e "$dbsetuc" "${mysql_params[@]}")
+			elif [[ $(check_mysql_connection $wp_dbhost_host $wp_dbhost_port $wp_dbuser $wp_dbpass) == "true" ]]; then
+				wpmu=$(sudo mysql --defaults-group-suffix=_${wp_dbhost_host}:${wp_dbhost_port}_${wp_dbuser} --connect-timeout=10 -h "$wp_dbhost_host" -P "$wp_dbhost_port" -u"$wp_dbuser" -e "$dbsetup")
+				[[ -n $wpmu ]] && mutype=$(sudo mysql --defaults-group-suffix=_${wp_dbhost_host}:${wp_dbhost_port}_${wp_dbuser} --connect-timeout=10 -h "$wp_dbhost_host" -P "$wp_dbhost_port" -u"$wp_dbuser" -e "$dbsetuc")
 			fi
 			
 			if [[ $(echo $mutype | cut -f 2 -d " " -s) == "1" ]]; then
@@ -870,20 +1109,20 @@ is_wp_installed() {
 	# When you create a WP site, DB is created only after the initial WP installation wizard is completed.
 	
 	if [[ $(is_wp $1 $2) == "true" ]]; then
-		wp_conf_retrieve $1 true false $2
+		wp_conf_retrieve $1 false false $2
 		# It makes no sense checking for mapped domains, that's why is set to false.
 		# is_wp_installed will return true even if domain is not mapped, only a domain parked pointing to a WP site.
 		# if we want to check for mapped domains: wp_conf_retrieve $1 true false $2 > /dev/null (silenced echoed messages because affects this function)
 		# but that makes no-sense because even if it's not mapped, it will return the main site data
 		# Until now, we don't need a "is_domain_mapped" function, maybe we can change "is_wp_installed" to only be true for main domain sites, not parked (if it's not mapped). This can change in the future!!!
 		
-		if [[ -n $wp_dbhost && -n $wp_dbname && -n $wp_dbpref ]]; then
+		if [[ -n $wp_dbhost_host && -n $wp_dbname && -n $wp_dbpref ]]; then
 			local dbsetup="SELECT * FROM information_schema.tables WHERE table_schema = '$wp_dbname' AND table_name = '${wp_dbpref}options' LIMIT 1;"
 			
-			if [[ $wp_dbhost == "localhost" && $(check_mysql_connection localhost) == "true" ]]; then
-				[[ -n $(sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS -e "$dbsetup") ]] && echo "true" || echo "false"
-			elif [[ $(check_mysql_connection $extdb_url $extdb_port $extdb_user $extdb_pass) == "true" ]]; then
-				[[ -n $(sudo mysql --connect-timeout=10 -h "$extdb_url" -P "$extdb_port" -u"$extdb_user" -p"$extdb_pass" -e "$dbsetup") ]] && echo "true" || echo "false"
+			if [[ $wp_dbhost_host == "localhost" && $(check_mysql_connection localhost $mysql_param) == "true" ]]; then
+				[[ -n $(sudo mysql --connect-timeout=10 --user=admin -e "$dbsetup" "${mysql_params[@]}") ]] && echo "true" || echo "false"
+			elif [[ $(check_mysql_connection $wp_dbhost_host $wp_dbhost_port $wp_dbuser $wp_dbpass) == "true" ]]; then
+				[[ -n $(sudo mysql --defaults-group-suffix=_${wp_dbhost_host}:${wp_dbhost_port}_${wp_dbuser} --connect-timeout=10 -h "$wp_dbhost_host" -P "$wp_dbhost_port" -u"$wp_dbuser" -e "$dbsetup") ]] && echo "true" || echo "false"
 			else
 				echo "false"
 			fi
@@ -988,13 +1227,8 @@ is_log() {
 
 
 escaped_string() {
-	if [[ $2 == "-grep" ]]; then
-		# Escaped characters: Put a backslash before $.*/[\]^()+
-		echo $(echo $1 | sed "s#/#\\\/#g" | sed "s/\./\\\./g" | sed "s/\\$/\\\\$/g" | sed "s/\*/\\\*/g" | sed "s/\\\/\\\\/g" | sed "s/\[/\\\[/g" | sed "s/\]/\\\]/g" | sed "s/\^/\\\^/g")
-	else
-		# Escaped characters: Put a backslash before $.*/[\]^
-		echo $(echo $1 | sed "s#/#\\\/#g" | sed "s/\./\\\./g" | sed "s/\\$/\\\\$/g" | sed "s/\*/\\\*/g" | sed "s/\\\/\\\\/g" | sed "s/\[/\\\[/g" | sed "s/\]/\\\]/g" | sed "s/\^/\\\^/g" | sed -E "s/\(/\\\(/g" | sed -E "s/\)/\\\)/g" | sed "s/\+/\\\+/g")
-	fi
+	# Escaped characters: Put a backslash before $.*/[\]^()+
+	echo $(echo $1 | sed "s#/#\\\/#g" | sed "s/\./\\\./g" | sed "s/\\$/\\\\$/g" | sed "s/\*/\\\*/g" | sed "s/\\\/\\\\/g" | sed "s/\[/\\\[/g" | sed "s/\]/\\\]/g" | sed "s/\^/\\\^/g" | sed -E "s/\(/\\\(/g" | sed -E "s/\)/\\\)/g" | sed "s/\+/\\\+/g")
 }
 
 
@@ -1063,7 +1297,7 @@ edit_wp_db_url_multisite() {
 	# $3 - WP BlogID to force (optional)
 	
 	if [[ -n $1 && -n $2 && $(is_wp_multisite $1) =~ ^(subdomain|subdirectory)$ ]]; then
-		wp_conf_retrieve $1 true true $subfolder
+		wp_conf_retrieve $1 false true $subfolder
 		
 		# Force WP blogID
 		if [[ -n $3 && $3 =~ ^[0-9]+$ ]]; then
@@ -1071,9 +1305,9 @@ edit_wp_db_url_multisite() {
 			local wp_blogid=$3		
 			local dbsetup="SELECT * FROM information_schema.tables WHERE table_schema = '$wp_dbname' AND table_name = '${wp_dbpref}options' LIMIT 1;"
 			
-			if [[ $wp_dbhost == "localhost" && -n $(sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS -e "$dbsetup") ]]; then
+			if [[ $wp_dbhost_host == "localhost" && -n $(sudo mysql --connect-timeout=10 --user=admin -e "$dbsetup" "${mysql_params[@]}") ]]; then
 				echo "${blu}${dim}WordPress blog ID (${wp_dbpref}) found and validated in a WP Multisite Network!${end}" >&2
-			elif [[ $wp_dbhost != "localhost" && -n $(sudo mysql --connect-timeout=10 -h "$extdb_url" -P "$extdb_port" -u"$extdb_user" -p"$extdb_pass" -e "$dbsetup") ]]; then
+			elif [[ $wp_dbhost_host != "localhost" && -n $(sudo mysql --defaults-group-suffix=_${wp_dbhost_host}:${wp_dbhost_port}_${wp_dbuser} --connect-timeout=10 -h "$wp_dbhost_host" -P "$wp_dbhost_port" -u"$wp_dbuser" -e "$dbsetup") ]]; then
 				echo "${blu}${dim}WordPress blog ID (${wp_dbpref}) found and validated in a WP Multisite Network!${end}" >&2
 			else
 				echo "${red}${dim}[ERROR] WordPress blog ID (${wp_dbpref}) not found!${end}" >&2
@@ -1082,20 +1316,18 @@ edit_wp_db_url_multisite() {
 			fi
 		fi
 		
-		if [[ -n $wp_dbhost && -n $wp_dbname && -n $wp_dbpref_main && -n $wp_blogid ]]; then
-			if [[ $wp_dbhost == "localhost" && $(check_mysql_connection localhost) == "true" ]]; then
-				sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS <<_EOF_
+		if [[ -n $wp_dbhost_host && -n $wp_dbname && -n $wp_dbpref_main && -n $wp_blogid ]]; then
+			if [[ $wp_dbhost_host == "localhost" && $(check_mysql_connection localhost $mysql_param) == "true" ]]; then
+				sudo mysql --connect-timeout=10 --user=admin "${mysql_params[@]}" <<_EOF_
 USE $wp_dbname;
 UPDATE ${wp_dbpref_main}blogs SET domain='$2' WHERE blog_id='${wp_blogid}';
 UPDATE ${wp_dbpref_main}blogs SET path='/' WHERE blog_id='${wp_blogid}';
-FLUSH PRIVILEGES;
 _EOF_
-			elif [[ $(check_mysql_connection $extdb_url $extdb_port $extdb_user $extdb_pass) == "true" ]]; then
-				sudo mysql --connect-timeout=10 -h "$extdb_url" -P "$extdb_port" -u"$extdb_user" -p"$extdb_pass" <<_EOF_
+			elif [[ $(check_mysql_connection $wp_dbhost_host $wp_dbhost_port $wp_dbuser $wp_dbpass) == "true" ]]; then
+				sudo mysql --defaults-group-suffix=_${wp_dbhost_host}:${wp_dbhost_port}_${wp_dbuser} --connect-timeout=10 -h "$wp_dbhost_host" -P "$wp_dbhost_port" -u"$wp_dbuser" <<_EOF_
 USE $wp_dbname;
 UPDATE ${wp_dbpref_main}blogs SET domain='$2' WHERE blog_id='${wp_blogid}';
 UPDATE ${wp_dbpref_main}blogs SET path='/' WHERE blog_id='${wp_blogid}';
-FLUSH PRIVILEGES;
 _EOF_
 			else
 				echo "${red}${dim}[ERROR] WordPress Multisite database cannot be updated!${end}" >&2
@@ -1115,23 +1347,22 @@ edit_wp_db_url() {
 	#IMPORTANT NOTE: Always be sure to take "www" Force-Redirect into consideration before updating WP Url in database.
 	
 	if [[ -n $1 && -n $2 && $(is_wp_installed $1 $3) == "true" ]]; then
-		wp_conf_retrieve $1 true true $3
-		if [[ -n $wp_dbhost && -n $wp_dbname && -n $wp_dbpref ]]; then
-			if [[ $wp_dbhost == "localhost" && $(check_mysql_connection localhost) == "true" ]]; then
-				sudo mysql --connect-timeout=10 --user=admin -p$ADMIN_PASS <<_EOF_
+		wp_conf_retrieve $1 false true $3
+		
+		if [[ -n $wp_dbhost_host && -n $wp_dbname && -n $wp_dbpref ]]; then
+			if [[ $wp_dbhost_host == "localhost" && $(check_mysql_connection localhost $mysql_param) == "true" ]]; then
+				sudo mysql --connect-timeout=10 --user=admin "${mysql_params[@]}" <<_EOF_
 USE $wp_dbname;
 UPDATE ${wp_dbpref}options SET option_value='$2' WHERE option_name='home';
 UPDATE ${wp_dbpref}options SET option_value='$2' WHERE option_name='siteurl';
-FLUSH PRIVILEGES;
 _EOF_
 
 				echo "${gre}${dim}WordPress site${blu} ${1}${3} ${gre}database URL updated! ${blu}(${2})${end}"
-			elif [[ $(check_mysql_connection $extdb_url $extdb_port $extdb_user $extdb_pass) == "true" ]]; then
-				sudo mysql --connect-timeout=10 -h "$extdb_url" -P "$extdb_port" -u"$extdb_user" -p"$extdb_pass" <<_EOF_
+			elif [[ $(check_mysql_connection $wp_dbhost_host $wp_dbhost_port $wp_dbuser $wp_dbpass) == "true" ]]; then
+				sudo mysql --defaults-group-suffix=_${wp_dbhost_host}:${wp_dbhost_port}_${wp_dbuser} --connect-timeout=10 -h "$wp_dbhost_host" -P "$wp_dbhost_port" -u"$wp_dbuser" <<_EOF_
 USE $wp_dbname;
 UPDATE ${wp_dbpref}options SET option_value='$2' WHERE option_name='home';
 UPDATE ${wp_dbpref}options SET option_value='$2' WHERE option_name='siteurl';
-FLUSH PRIVILEGES;
 _EOF_
 
 				echo "${gre}${dim}WordPress site${blu} ${1}${3} ${gre}database URL updated! ${blu}(${2})${end}"
@@ -1201,25 +1432,31 @@ dbword_check() {
 	local win="$1"
 	local RANDOM_NAME="Webinoly_$(pwgen -s -1)"
 	
-	# Reserved words - https://mariadb.com/kb/en/library/reserved-words/
-	# https://mariadb.com/kb/en/library/identifier-names/
-	
 	# Trim start/end spaces and quotes
 	win=$(echo ${win//\'})
 	win=$(echo ${win//\"} | xargs)
 	
 	# Check Lenght
-	[[ ( ${#win} -gt 80 && $2 == "user" ) || ( ${#win} -gt 64 && $2 != "user" ) ]] && win=$RANDOM_NAME
+	# MySQL user names are up to 32 characters long.
+	# MariaDB - Usernames can be up to 80 characters long before 10.6 and starting from 10.6 it can be 128 characters long.
+	# DB name is 64 for both!
+	[[ ( ${#win} -gt 64 && $2 != "user" ) ]] && win=$RANDOM_NAME
+	[[ ( ${#win} -gt 32 && $2 == "user" ) && $(conf_read db-engine) == "mysql" ]] && win=$RANDOM_NAME
+	[[ ( ${#win} -gt 80 && $2 == "user" ) && $(conf_read db-engine) != "mysql" ]] && win=$RANDOM_NAME
 	
-	# Reserved words
-	shopt -s nocasematch
-	if [[ $win =~ ^(ACCESSIBLE|ADD|ALL|ALTER|ANALYZE|AND|AS|ASC|ASENSITIVE|BEFORE|BETWEEN|BIGINT|BINARY|BLOB|BOTH|BY|CALL|CASCADE|CASE|CHANGE|CHAR|CHARACTER|CHECK|COLLATE|COLUMN|CONDITION|CONSTRAINT|CONTINUE|CONVERT|CREATE|CROSS|CURRENT_DATE|CURRENT_ROLE|CURRENT_TIME|CURRENT_TIMESTAMP|CURRENT_USER|CURSOR|DATABASE|DATABASES|DAY_HOUR|DAY_MICROSECOND|DAY_MINUTE|DAY_SECOND|DEC|DECIMAL|DECLARE|DEFAULT|DELAYED|DELETE|DESC|DESCRIBE|DETERMINISTIC|DISTINCT|DISTINCTROW|DIV|DO_DOMAIN_IDS|DOUBLE|DROP|DUAL|EACH|ELSE|ELSEIF|ENCLOSED|ESCAPED|EXCEPT|EXISTS|EXIT|EXPLAIN|FALSE|FETCH|FLOAT|FLOAT4|FLOAT8|FOR|FORCE|FOREIGN|FROM|FULLTEXT|GENERAL|GRANT|GROUP|HAVING|HIGH_PRIORITY|HOUR_MICROSECOND|HOUR_MINUTE|HOUR_SECOND|IF|IGNORE|IGNORE_DOMAIN_IDS|IGNORE_SERVER_IDS|IN|INDEX|INFILE|INNER|INOUT|INSENSITIVE|INSERT|INT|INT1|INT2|INT3|INT4|INT8|INTEGER|INTERSECT|INTERVAL|INTO|IS|ITERATE|JOIN|KEY|KEYS|KILL|LEADING|LEAVE|LEFT|LIKE|LIMIT|LINEAR|LINES|LOAD|LOCALTIME|LOCALTIMESTAMP|LOCK|LONG|LONGBLOB|LONGTEXT|LOOP|LOW_PRIORITY|MASTER_HEARTBEAT_PERIOD|MASTER_SSL_VERIFY_SERVER_CERT|MATCH|MAXVALUE|MEDIUMBLOB|MEDIUMINT|MEDIUMTEXT|MIDDLEINT|MINUTE_MICROSECOND|MINUTE_SECOND|MOD|MODIFIES|NATURAL|NOT|NO_WRITE_TO_BINLOG|NULL|NUMERIC|OFFSET|ON|OPTIMIZE|OPTION|OPTIONALLY|OR|ORDER|OUT|OUTER|OUTFILE|OVER|PAGE_CHECKSUM|PARSE_VCOL_EXPR|PARTITION|POSITION|PRECISION|PRIMARY|PROCEDURE|PURGE|RANGE|READ|READS|READ_WRITE|REAL|RECURSIVE|REF_SYSTEM_ID|REFERENCES|REGEXP|RELEASE|RENAME|REPEAT|REPLACE|REQUIRE|RESIGNAL|RESTRICT|RETURN|RETURNING|REVOKE|RIGHT|RLIKE|ROWS|SCHEMA|SCHEMAS|SECOND_MICROSECOND|SELECT|SENSITIVE|SEPARATOR|SET|SHOW|SIGNAL|SLOW|SMALLINT|SPATIAL|SPECIFIC|SQL|SQLEXCEPTION|SQLSTATE|SQLWARNING|SQL_BIG_RESULT|SQL_CALC_FOUND_ROWS|SQL_SMALL_RESULT|SSL|STARTING|STATS_AUTO_RECALC|STATS_PERSISTENT|STATS_SAMPLE_PAGES|STRAIGHT_JOIN|TABLE|TERMINATED|THEN|TINYBLOB|TINYINT|TINYTEXT|TO|TRAILING|TRIGGER|TRUE|UNDO|UNION|UNIQUE|UNLOCK|UNSIGNED|UPDATE|USAGE|USE|USING|UTC_DATE|UTC_TIME|UTC_TIMESTAMP|VALUES|VARBINARY|VARCHAR|VARCHARACTER|VARYING|WHEN|WHERE|WHILE|WINDOW|WITH|WRITE|XOR|YEAR_MONTH|ZEROFILL)$ ]]; then
+	# Reserved words - https://mariadb.com/kb/en/library/reserved-words/ https://dev.mysql.com/doc/mysqld-version-reference/en/keywords-8-0.html
+	# https://mariadb.com/kb/en/library/identifier-names/
+	# We have both MySQL and MariaDB reserved words.
+	# We have information_schema.keywords, but we prefer do this check manually because mariadb doesn't have a way to know which keywords are reserved.
+	if [[ ${win^^} =~ ^(ACCESSIBLE|ADD|ALL|ALTER|ANALYZE|AND|AS|ASC|ASENSITIVE|BEFORE|BETWEEN|BIGINT|BINARY|BLOB|BOTH|BY|CALL|CASCADE|CASE|CHANGE|CHAR|CHARACTER|CHECK|COLLATE|COLUMN|CONDITION|CONSTRAINT|CONTINUE|CONVERT|CREATE|CROSS|CUBE|CUME_DIST|CURRENT_DATE|CURRENT_TIME|CURRENT_TIMESTAMP|CURRENT_USER|CURSOR|DATABASE|DATABASES|DAY_HOUR|DAY_MICROSECOND|DAY_MINUTE|DAY_SECOND|DEC|DECIMAL|DECLARE|DEFAULT|DELAYED|DELETE|DENSE_RANK|DESC|DESCRIBE|DETERMINISTIC|DISTINCT|DISTINCTROW|DIV|DOUBLE|DROP|DUAL|EACH|ELSE|ELSEIF|EMPTY|ENCLOSED|ESCAPED|EXCEPT|EXISTS|EXIT|EXPLAIN|FALSE|FETCH|FIRST_VALUE|FLOAT|FLOAT4|FLOAT8|FOR|FORCE|FOREIGN|FROM|FULLTEXT|FUNCTION|GENERATED|GET|GRANT|GROUP|GROUPING|GROUPS|HAVING|HIGH_PRIORITY|HOUR_MICROSECOND|HOUR_MINUTE|HOUR_SECOND|IF|IGNORE|IN|INDEX|INFILE|INNER|INOUT|INSENSITIVE|INSERT|INT|INT1|INT2|INT3|INT4|INT8|INTEGER|INTERSECT|INTERVAL|INTO|IO_AFTER_GTIDS|IO_BEFORE_GTIDS|IS|ITERATE|JOIN|JSON_TABLE|KEY|KEYS|KILL|LAG|LAST_VALUE|LATERAL|LEAD|LEADING|LEAVE|LEFT|LIKE|LIMIT|LINEAR|LINES|LOAD|LOCALTIME|LOCALTIMESTAMP|LOCK|LONG|LONGBLOB|LONGTEXT|LOOP|LOW_PRIORITY|MASTER_BIND|MASTER_SSL_VERIFY_SERVER_CERT|MATCH|MAXVALUE|MEDIUMBLOB|MEDIUMINT|MEDIUMTEXT|MIDDLEINT|MINUTE_MICROSECOND|MINUTE_SECOND|MOD|MODIFIES|NATURAL|NOT|NO_WRITE_TO_BINLOG|NTH_VALUE|NTILE|NULL|NUMERIC|OF|ON|OPTIMIZE|OPTIMIZER_COSTS|OPTION|OPTIONALLY|OR|ORDER|OUT|OUTER|OUTFILE|OVER|PARTITION|PERCENT_RANK|PRECISION|PRIMARY|PROCEDURE|PURGE|RANGE|RANK|READ|READS|READ_WRITE|REAL|RECURSIVE|REFERENCES|REGEXP|RELEASE|RENAME|REPEAT|REPLACE|REQUIRE|RESIGNAL|RESTRICT|RETURN|REVOKE|RIGHT|RLIKE|ROW|ROWS|ROW_NUMBER|SCHEMA|SCHEMAS|SECOND_MICROSECOND|SELECT|SENSITIVE|SEPARATOR|SET|SHOW|SIGNAL|SMALLINT|SPATIAL|SPECIFIC|SQL|SQLEXCEPTION|SQLSTATE|SQLWARNING|SQL_BIG_RESULT|SQL_CALC_FOUND_ROWS|SQL_SMALL_RESULT|SSL|STARTING|STORED|STRAIGHT_JOIN|SYSTEM|TABLE|TERMINATED|THEN|TINYBLOB|TINYINT|TINYTEXT|TO|TRAILING|TRIGGER|TRUE|UNDO|UNION|UNIQUE|UNLOCK|UNSIGNED|UPDATE|USAGE|USE|USING|UTC_DATE|UTC_TIME|UTC_TIMESTAMP|VALUES|VARBINARY|VARCHAR|VARCHARACTER|VARYING|VIRTUAL|WHEN|WHERE|WHILE|WINDOW|WITH|WRITE|XOR|YEAR_MONTH|ZEROFILL|CURRENT_ROLE|DELETE_DOMAIN_ID|DO_DOMAIN_IDS|GENERAL|IGNORE_DOMAIN_IDS|IGNORE_SERVER_IDS|MASTER_HEARTBEAT_PERIOD|OFFSET|PAGE_CHECKSUM|PARSE_VCOL_EXPR|POSITION|REF_SYSTEM_ID|RETURNING|SLOW|STATS_AUTO_RECALC|STATS_PERSISTENT|STATS_SAMPLE_PAGES)$ ]]; then
 		win=$RANDOM_NAME
 	fi
-	shopt -u nocasematch
 	
 	# Only numerals 0-9, basic Latin letters, both lowercase and uppercase, dollar sign, underscore.
 	[[ $win =~ ^[0-9A-Za-z\$_]+$ ]] || win=$RANDOM_NAME
+	
+	# Dollar sign at the beggining not allowed.
+	[[ $(echo "${win}" | cut -c-1) == "$" ]] && win=$RANDOM_NAME
 	
 	# Can not contain only numbers
 	[[ $win =~ ^[0-9]+$ ]] && win=$RANDOM_NAME
@@ -1233,28 +1470,49 @@ dbword_check() {
 
 cnf_delete() {
 	#Example: cnf_delete error_log
-	[[ -f /etc/mysql/mariadb.conf.d/90-webinoly.cnf ]] && sudo sed -i "/^$1 /d" /etc/mysql/mariadb.conf.d/90-webinoly.cnf
+	[[ -f $MYSQL_CONF_PATH/${MYSQL_CONF_PREF}-webinoly.cnf ]] && sudo sed -i "/^$1 /d" $MYSQL_CONF_PATH/${MYSQL_CONF_PREF}-webinoly.cnf
 }
 cnf_write() {
 	#Example: cnf_write error_log /var/log/mysql/error.log
 	cnf_delete $1
+	mysql_default_cnf
 	[[ -n $2 ]] && local value="= $2"
-	echo "$1 $value" >> /etc/mysql/mariadb.conf.d/90-webinoly.cnf
+	echo "$1 $value" >> $MYSQL_CONF_PATH/${MYSQL_CONF_PREF}-webinoly.cnf
 }
 cnf_read() {
 	#Example: cnf_read error_log
-	echo $( grep -P "^$1 = " /etc/mysql/mariadb.conf.d/90-webinoly.cnf | cut -f 2 -d "=" -s | sed 's/ //g' )
+	[[ -f $MYSQL_CONF_PATH/${MYSQL_CONF_PREF}-webinoly.cnf ]] && echo $( grep -P "^$1 = " $MYSQL_CONF_PATH/${MYSQL_CONF_PREF}-webinoly.cnf | cut -f 2 -d "=" -s | sed 's/ //g' )
 }
 mysql_default_cnf() {
 	# Creates the default Webinoly Configuration File (.cnf) for mysql if not exists.
-	if [[ ! -f /etc/mysql/mariadb.conf.d/90-webinoly.cnf ]]; then
-		sudo touch /etc/mysql/mariadb.conf.d/90-webinoly.cnf
-		sudo chmod 644 /etc/mysql/mariadb.conf.d/90-webinoly.cnf
-		sudo chown -R root:root /etc/mysql/mariadb.conf.d/90-webinoly.cnf
+	if [[ ! -f $MYSQL_CONF_PATH/${MYSQL_CONF_PREF}-webinoly.cnf ]]; then
+		sudo touch $MYSQL_CONF_PATH/${MYSQL_CONF_PREF}-webinoly.cnf
+		sudo chmod 644 $MYSQL_CONF_PATH/${MYSQL_CONF_PREF}-webinoly.cnf
+		sudo chown -R root:root $MYSQL_CONF_PATH/${MYSQL_CONF_PREF}-webinoly.cnf
 		
-		echo "# Webinoly MySQL Configuration File
+		echo "# Webinoly MySQL/MariaDB Configuration File
+######################################################################
+# Webinoly (This configuration file is only for internal use)        #
+# Please, DO NOT MODIFY this file, it can cause unexpected behavior. #
+######################################################################
 [mysqld]
-log_error = /var/log/mysql/error.log" >> /etc/mysql/mariadb.conf.d/90-webinoly.cnf
+log_error = /var/log/mysql/error.log" >> $MYSQL_CONF_PATH/${MYSQL_CONF_PREF}-webinoly.cnf
+	fi
+}
+mysql_login_cnf() {
+	# MySQL login data
+	if [[ ! -f $MYSQL_CONF_PATH/${MYSQL_CONF_PREF}-webinoly-login.cnf ]]; then
+		sudo touch $MYSQL_CONF_PATH/${MYSQL_CONF_PREF}-webinoly-login.cnf
+		sudo chmod 644 $MYSQL_CONF_PATH/${MYSQL_CONF_PREF}-webinoly-login.cnf
+		sudo chown -R root:root $MYSQL_CONF_PATH/${MYSQL_CONF_PREF}-webinoly-login.cnf
+		
+		echo "# Webinoly MySQL/MariaDB Login Configuration File
+######################################################################
+# Webinoly (This configuration file is only for internal use)        #
+# Please, DO NOT MODIFY this file, it can cause unexpected behavior. #
+######################################################################
+
+" >> $MYSQL_CONF_PATH/${MYSQL_CONF_PREF}-webinoly-login.cnf
 	fi
 }
 
@@ -1288,17 +1546,80 @@ check_var() {
 			[[ $((3*$cores)) =~ ^[0-9]+ && $((3*$cores)) -ge 6 ]] && local out=$((3*$cores)) || local out=6
 		fi
 	
+	# PHP max input vars
+	elif [[ $1 == "php-max-input-vars" ]]; then
+		[[ -n $(conf_read php-max-input-vars) && $(conf_read php-max-input-vars) =~ ^[0-9]+$ && $(conf_read php-max-input-vars) -gt 0 ]] && local out=$(conf_read php-max-input-vars) || local out=5000
+	
+	# PHP opcache validate timestamps
+	elif [[ $1 == "php-opcache-timestamps" ]]; then
+			local out="false"
+			[[ $(conf_read php-opcache-timestamps) == "true" ]] && local out="1"
+			[[ $(conf_read php-opcache-timestamps) == "false" ]] && local out="0"
+
+	# PHP opcache revalidate frequency
+	elif [[ $1 == "php-opcache-reval" ]]; then
+		[[ -n $(conf_read php-opcache-reval) && $(conf_read php-opcache-reval) =~ ^[0-9]+$ && $(conf_read php-opcache-reval) -ge 0 ]] && local out=$(conf_read php-opcache-reval) || local out="false"
+	
 	# Redis Memory
 	elif [[ $1 == "redis-max-mem" ]]; then
 		[[ -n $(conf_read redis-max-mem) && $(conf_read redis-max-mem) =~ ^[0-9]+$ && $(conf_read redis-max-mem) -le 100 ]] && local out=$(conf_read redis-max-mem) || local out=10
 		
 	# client_max_body_size,upload_max_filesize,post_max_size
 	elif [[ $1 == "max-mb-uploads" ]]; then
-		[[ -n $(conf_read max-mb-uploads) && $(conf_read max-mb-uploads) =~ ^[0-9]+$ && $(conf_read max-mb-uploads) -gt 0 ]] && local out=$(conf_read max-mb-uploads) || local out=100
+		[[ -n $(conf_read max-mb-uploads) && $(conf_read max-mb-uploads) =~ ^[0-9]+$ && $(conf_read max-mb-uploads) -gt 0 ]] && local out=$(conf_read max-mb-uploads) || local out=100	
 	
 	# FastCGI Cache size
 	elif [[ $1 == "run-folder-size" ]]; then
 		[[ -n $(conf_read run-folder-size) && $(conf_read run-folder-size) =~ ^[0-9]+$ && $(conf_read run-folder-size) -gt 10 && $(conf_read run-folder-size) -le "70" ]] && local out=$(conf_read run-folder-size) || local out=25
+	
+	# FastCGI Cache: Query Strings
+	elif [[ $1 == "wpcache-query-strings" ]]; then
+		if [[ $(conf_read wpcache-query-strings) =~ ^(all|never)$ ]]; then
+			local out=$(conf_read wpcache-query-strings)
+		else
+			local out="false"
+		fi
+	
+	# Locations: Deny Extensions
+	elif [[ $1 == "locations-deny-extensions" ]]; then
+		if [[ -z $(conf_read locations-deny-extensions) ]]; then
+			local out="7z|asc|asp|aspx|ba|bak|bash|bat|bin|bz2|c|cfg|cgi|class|com|conf|cpp|crt|cs|dat|db|dbf|deb|der|dll|dmg|dmp|dump|ear|exe|git|gz|h|hg|hqx|img|ini|iso|jar|jsp|log|mdb|msi|msm|msp|old|orig|original|out|pem|php#|php_bak|php~|pkg|pl|ppk|py|rar|rdf|rpm|run|save|sh|sql|srv|svn|swo|swp|sys|tar|taz|tcl|tgz|tk|tmp|tpl|tz|vb|war|wsf|z|zip"
+		else
+			local out=$(conf_read locations-deny-extensions)
+		fi
+	
+	# Locations: Deny Files
+	elif [[ $1 == "locations-deny-files" ]]; then
+		if [[ -z $(conf_read locations-deny-files) ]]; then
+			local out="changelog|example|installation|legalnotice|license|readme|wp-config"
+		else
+			local out=$(conf_read locations-deny-files)
+		fi
+	
+	# FastCGI Cache: Exclude URL
+	elif [[ $1 == "wpcache-exclude-url" ]]; then
+		if [[ -z $(conf_read wpcache-exclude-url) ]]; then
+			local out="/wp-admin/|/xmlrpc.php|wp-.*.php|index.php|/feed/|.*sitemap.*\.xml|/feed/|/account/|/add_to_cart/|/cart/|/my-account/|/checkout/|/logout/"
+		else
+			local out=$(conf_read wpcache-exclude-url)
+		fi
+	
+	# FastCGI Cache: Exclude Cookie
+	elif [[ $1 == "wpcache-exclude-cookie" ]]; then
+		if [[ -z $(conf_read wpcache-exclude-cookie) ]]; then
+			local out="comment_author|wordpress_[a-f0-9]+|wp-postpass|wordpress_no_cache|wordpress_logged_in|[a-z0-9]+_items_in_cart|[a-z0-9]+_cart_hash"
+		else
+			local out=$(conf_read wpcache-exclude-cookie)
+		fi
+	
+	# Nginx Error Log Level
+	elif [[ $1 == "nginx-error-log-level" ]]; then
+		[[ -n $(conf_read nginx-error-log-level) && $(conf_read nginx-error-log-level) =~ ^(info|notice|warn|error|crit|alert|emerg)$ ]] && local out=$(conf_read nginx-error-log-level) || local out="false"
+	# Nginx Log Format
+	elif [[ $1 == "nginx-log-format" ]]; then
+		local out="we_log" # Basic is fallback!
+		[[ $(conf_read nginx-log-format) == "extended" ]] && local out="we_log_ext"
+		[[ $(conf_read nginx-log-format) == "custom" ]] && local out="we_log_custom"
 		
 	else
 		local out="false"
@@ -1476,7 +1797,7 @@ custom_cache_global() {
 			[[ -n $skip_cache ]] && local value=$skip_cache
 			
 			sudo sed -Ei "/^# Value: $(escaped_string $value)( .*)?$/,/^# CacheRuleEnd/{/.*/d}" $confile
-			[[ ! -s $confile ]] && sudo rm $confile
+			[[ ! -s $confile || -z $(grep '[^[:space:]]' $confile ) ]] && sudo rm $confile # Better because also check for files containing only empty-spaces!
 		fi
 		echo "${gre}Cache rule successfully removed!${end}"
 	else
@@ -1621,4 +1942,24 @@ help_message() {
 	echo "${blu}We have put a lot of time and effort into creating the most awesome, detailed and extensive documentation just for you."
 	echo "${dim}Link: https://webinoly.com/documentation/ ${end}"
 	echo ""
+}
+
+
+ads_donate() {
+	# Donations message displayed once a day!
+	# Note: Don't run when stdout is redirected to /dev/null: https://unix.stackexchange.com/questions/484228/how-to-check-if-stdin-is-dev-null-from-the-shell
+	# if [[ -z $(conf_read cron-ads) && -n $EPOCHSECONDS ]]; then
+	# 	conf_write cron-ads $EPOCHSECONDS
+	# elif ! [[ $(conf_read cron-ads) =~ ^[0-9]+$ ]] || [[ $(conf_read cron-ads) -gt $EPOCHSECONDS ]]; then # Autofix! (Just in case!)
+	# 	conf_write cron-ads $EPOCHSECONDS
+	# elif [[ $TERM != "dumb" && -n $EPOCHSECONDS && -n $(conf_read cron-ads) && $(($EPOCHSECONDS-$(conf_read cron-ads))) -gt 86400 ]] && ! [[ /dev/stdout -ef /dev/null ]]; then
+	# 	echo "${blu}"
+	# 	echo "****************************************************************************"
+	# 	echo "********************     ${bol}Are you enjoying Webinoly?${end}${blu}     ********************"
+	# 	echo "***  ${dim}With just \$1 you can make a difference to keep this project alive!${end}${blu}  ***"
+	# 	echo "***********    ${bol}Donate Now!${end}${blu}${dim} https://github.com/sponsors/QROkes${end}${blu}    ***********"
+	# 	echo "****************************************************************************"
+	# 	echo "${end}"
+	# 	conf_write cron-ads $EPOCHSECONDS
+	# fi
 }
