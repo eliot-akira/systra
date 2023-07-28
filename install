@@ -8,7 +8,30 @@ SCRIPTPATH=$(dirname $(readlink -f "$0"))
 echo -e "Installing system features\n"
 
 if [[ $EUID -eq 0 ]]; then
-  echo "TODO: If run as root user, set up default user"
+
+  if ! id ubuntu >/dev/null 2>&1; then
+
+    echo -e "Creating default user \"ubuntu\""
+    enter-when-ready
+
+    sudo adduser --disabled-password --gecos '' ubuntu
+    sudo usermod -aG sudo ubuntu
+
+    ### Disable sudo password
+
+    sudo cp /etc/sudoers /etc/sudoers.bak
+    sudo bash -c "echo 'ubuntu ALL=(ALL) NOPASSWD: ALL' | (EDITOR='tee -a' visudo)"
+
+    ### Add SSH public key
+
+    rsync --archive --chown=ubuntu:ubuntu ~/.ssh /home/ubuntu
+
+    sudo -u ubuntu -H bash -c "chmod 700 ~/.ssh"
+    sudo -u ubuntu -H bash -c "chmod 600 ~/.ssh/authorized_keys"
+
+  fi
+
+  echo -e "\nEnter \"exit\" to log out from this session, then login with user ubuntu\n"
   exit
 fi
 
