@@ -1962,4 +1962,5 @@ ads_donate() {
 	# 	echo "${end}"
 	# 	conf_write cron-ads $EPOCHSECONDS
 	# fi
+  : # do nothing
 }

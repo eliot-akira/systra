@@ -107,14 +107,14 @@ if [ ! -d /opt/webinoly ]; then
 
   ### <---
 
-  sudo -u root bash -c 'source /opt/webinoly/lib/general && webinoly -conf-value_app-version=$app_version' &> /dev/null
+  sudo -u root bash -c 'source /opt/webinoly/lib/general && webinoly -dynvar=app-version -value -value=$app_version' 1> /dev/null
 
   # Increase upload limit
-  sudo webinoly -conf-value_max-mb-uploads=200 &> /dev/null
+  sudo webinoly -dynvar=max-mb-uploads -value=200 1> /dev/null
 
   # Disable XMLRPC - See assets/webinoly/lib/install, nginx_optim()
   # Updates /etc/nginx/common/wpcommon.conf, /etc/nginx/common/wpcommon-noauth.conf
-  sudo webinoly -conf-value_xmlrpc=blocked &> /dev/null
+  sudo webinoly -dynvar=xmlrpc -value=blocked 1> /dev/null
 
 
   # Let user manually enter email
@@ -124,7 +124,7 @@ if [ ! -d /opt/webinoly ]; then
   echo -n "Enter email address: "
   read EMAIL
   if [ ! -z "$EMAIL" ]; then
-    sudo webinoly -email="$EMAIL" &>/dev/null # Saved in /opt/webinoly/webinoly.conf
+    sudo webinoly -email="$EMAIL" 1> /dev/null # Saved in /opt/webinoly/webinoly.conf
   fi
 
   # Timezone
@@ -162,8 +162,8 @@ if [ ! -d /opt/webinoly ]; then
   sudo webinoly -login-www-data=on
 
   # Disable HTTP Auth
-  sudo httpauth -wp-admin=off
-  sudo webinoly -conf-value_wp-admin-auth=purged &> /dev/null
+  # sudo httpauth -wp-admin=off 1> /dev/null
+  sudo webinoly -dynvar=wp-admin-auth -value=purged 1> /dev/null
 
   # Allow default user to edit served files
 
@@ -189,7 +189,7 @@ if [ ! -d /opt/webinoly ]; then
   # Increase file watch limit - Helps with remote editing large folders
   # https://code.visualstudio.com/docs/setup/linux#_visual-studio-code-is-unable-to-watch-for-file-changes-in-this-large-workspace-error-enospc
   sudo -u root bash -c 'echo -e "\nfs.inotify.max_user_watches=524288\n" >> /etc/sysctl.conf'
-  sudo sysctl -p &> /dev/null
+  sudo sysctl -p 1> /dev/null
 
   echo -e "\nIf you need to see MySQL credentials in the future, run: sudo webinoly -dbpass\n"
 
