@@ -52,6 +52,7 @@ if [ ! -f ~/.bash_aliases ]; then
   sudo apt install trash-cli
 
   echo -e "\nRun the following command: source ~/.profile && sys install\n"
+  echo -e "\nFor legacy server: source ~/.profile && PHP_VER=7.2 sys install\n"
   exit
 fi
 
@@ -68,8 +69,8 @@ if [ ! -d /opt/webinoly ]; then
   sudo mkdir -p /opt/webinoly
 
   sudo cp -r $SCRIPTPATH/assets/webinoly/lib /opt/webinoly
-  sudo cp -r $SCRIPTPATH/assets/webinoly/usr /opt/webinoly
   sudo cp -r $SCRIPTPATH/assets/webinoly/templates /opt/webinoly
+  sudo cp -r $SCRIPTPATH/assets/webinoly/usr /opt/webinoly
 
   ### Based on assets/webinoly/weby --->
 
@@ -119,15 +120,18 @@ if [ ! -d /opt/webinoly ]; then
     sudo webinoly -timezone
   fi
 
-  # MariaDB >= 10.6 does not support character set "utf8" (must use utf8md3 or utf8md4), which breaks Duplicator packages from older servers
-  sudo stack -mysql-ver=10.5
-
   if [ -z "${PHP_VER-}" ]; then
-    # Default PHP version
-    PHP_VER=7.4
+
+    # Default PHP version - No need to call sudo stack
+    PHP_VER=8.2
+
+  elif [ "$PHP_VER" == "7.2" ]; then
+
+    # MariaDB >= 10.6 does not support character set "utf8" (must use utf8md3 or utf8md4), which breaks Duplicator packages from legacy servers
+    sudo stack -mysql-ver=10.5
   fi
 
-  sudo stack -php-ver=$PHP_VER # assets/webinoly/lib/general, php_supported=(7.2 7.4 8.0 8.1)
+  sudo stack -php-ver=$PHP_VER # assets/webinoly/lib/general, php_supported=(..)
 
   sudo stack -lemp
 
