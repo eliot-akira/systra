@@ -12,7 +12,6 @@
 SCRIPTPATH=$(dirname $(readlink -f "$0"))
 . $SCRIPTPATH/common
 
-
 # System
 
 DOMAIN_NAME=$1

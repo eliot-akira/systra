@@ -12,10 +12,14 @@ fi
 SCRIPTPATH=$(dirname $(readlink -f "$0"))
 . $SCRIPTPATH/common
 
-ARCHIVE_PATH=~/archive
+ARCHIVE_PATH=~/archive/apps
 
 DOMAIN_NAME=${1-}
 SUBFOLDER=${2-}
+
+if [ ! -d "$ARCHIVE_PATH" ]; then
+  mkdir -p $ARCHIVE_PATH
+fi
 
 if [ -z "$SUBFOLDER" ]; then
 

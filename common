@@ -1,5 +1,9 @@
 #!/bin/bash
 
+function is-systra() {
+  echo "true"
+}
+
 alias www='sudo -u www-data'
 alias wp="sudo -u www-data /home/$USER/bin/wp"
 
@@ -21,4 +25,35 @@ function reload-nginx() {
 
   echo -e "\nRestarting NGINX server.."
   sudo service nginx reload
+}
+
+# From systra/assets/webinoly/lib/general
+function is-ssl() {
+	[[ -f /etc/nginx/sites-available/$1 && -n $(cat /etc/nginx/sites-available/$1 | grep -F "ssl_certificate_key") ]] && echo "true" || echo "false"
+}
+
+function is-root-domain() {
+
+  ROOT_DOMAIN=$(sed 's/.*\.\(.*\..*\)/\1/' <<< ${1-})
+
+  if [ "$DOMAIN_NAME" == "$ROOT_DOMAIN" ]; then
+    echo "true"
+  else
+    echo "false"
+  fi
+}
+
+function read-wp-config() {
+	# Example: read-wp-config example.com WP_DEBUG
+	# Example: read-wp-config example.com WP_DEBUG /subfolder
+	
+  local child_site=""
+
+  if [ ! -z "${3-}" ]; then
+    child_site=/$3
+  fi
+
+	local path="/var/www/$1/htdocs$child_site/wp-config.php"
+	# Last sed is to remove ^M (carriege return character) I don't know why is introduced.
+	[[ -n $1 && -n $2 && -n $path ]] && echo $(grep -iE "^define\([ ]*[\"'\'']$2[\"'\''][ ]*,.*\);.*$" $path | cut -f 2 -d "," -s | sed 's/[ ;")'\'']//g' | sed -e "s/\r//g" ) || return
 }

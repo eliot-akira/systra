@@ -1,24 +1,66 @@
 #!/usr/bin/env bash
 set -eou pipefail
 
-if [ -z ${1-} ]; then
+help() {
   echo -e "Create a new site\n\nUsage:\n"
-  echo "  new [domain]              Create new site"
-  echo "  new [domain] [folder]     Create new child site"
+  echo "  new [domain]                       Create new site"
+  echo "  new [domain] from [seed]           Create new site from seed type"
+  echo "  new [domain] [folder]              Create new child site"
+  echo "  new [domain] [folder] from [seed]  Create new child site from seed type"
   echo
+}
+
+if [ -z ${1-} ]; then
+  help
   exit
 fi
 
-SCRIPTPATH=$(dirname $(readlink -f "$0"))
-. $SCRIPTPATH/common
+SCRIPT_PATH=$(dirname $(readlink -f "$0"))
+. $SCRIPT_PATH/common
 
-DOMAIN_NAME=$1
-SUBFOLDER=${2-}
+DOMAIN_NAME=${1-}
+SEED_TYPE=""
+SUBFOLDER=""
+
+if [ "${2-}" == "from" ]; then
+  SEED_TYPE="${3-}"
+else
+  SUBFOLDER=${2-}
+  if [ "${3-}" == "from" ]; then
+    SEED_TYPE="${4-}"
+  fi
+fi
+
+SEED_PATH="/home/$USER/lib/seeds/$SEED_TYPE"
+
+if [ ! -z "$SEED_TYPE" ] && [ ! -d "$SEED_PATH" ]; then
+  echo "Seed type not found: $SEED_PATH"
+  exit
+fi
 
 if [ -z "$SUBFOLDER" ]; then
 
-  echo "Creating site at $DOMAIN_NAME"
+  echo "Creating site at domain $DOMAIN_NAME"
   enter-when-ready
+
+  # Install
+
+  SEED_SCRIPT="$SEED_PATH/install.sh"
+  if [ ! -z "$SEED_TYPE" ] && [ -f "$SEED_SCRIPT" ]; then
+    . "$SEED_SCRIPT" "$DOMAIN_NAME"
+
+    # The script is meant to handle entire custom install
+    exit
+  fi
+
+  # Pre install
+
+  SEED_SCRIPT="$SEED_PATH/pre-install.sh"
+  if [ ! -z "$SEED_TYPE" ] && [ -f "$SEED_SCRIPT" ]; then
+    . "$SEED_SCRIPT" "$DOMAIN_NAME"
+  fi
+
+
 
   # Create site - Redirect www -> root domain
   sudo site $DOMAIN_NAME -wp -force-redirect=root
@@ -40,7 +82,7 @@ if [ -z "$SUBFOLDER" ]; then
   sudo chown -R $USER:www-data /var/www/$DOMAIN_NAME/htdocs
   sudo chmod -R g+rw /var/www/$DOMAIN_NAME/htdocs
 
-  pushd "/home/$USER/apps/$DOMAIN_NAME/" &>/dev/null
+  pushd "/home/$USER/apps/$DOMAIN_NAME/" 1>/dev/null
 
   # Remove default plugins
   if [ -d "wp-content/plugins/akismet" ]; then
@@ -67,10 +109,18 @@ if [ -z "$SUBFOLDER" ]; then
   wp core install --url=$SITE_URL --title="Site Title" --admin_user=admin --admin_password=admin --admin_email=admin@example.com
   wp rewrite structure '/%postname%'
 
-  popd
+  popd 1>/dev/null
 
   echo -e "\nSite installed at ~/apps/$DOMAIN_NAME"
   echo "Site URL: $SITE_URL"
+
+
+  # Post install
+
+  SEED_SCRIPT="$SEED_PATH/post-install.sh"
+  if [ ! -z "$SEED_TYPE" ] && [ -f "$SEED_SCRIPT" ]; then
+    . "$SEED_SCRIPT" "$DOMAIN_NAME"
+  fi
 
   exit
 fi
@@ -85,6 +135,22 @@ fi
 
 echo "Creating child site at $DOMAIN_NAME/$SUBFOLDER"
 enter-when-ready
+
+# Install
+
+SEED_SCRIPT="$SEED_PATH/install.sh"
+if [ ! -z "$SEED_TYPE" ] && [ -f "$SEED_SCRIPT" ]; then
+  . "$SEED_SCRIPT" "$DOMAIN_NAME" "$SUBFOLDER"
+  exit
+fi
+
+# Pre install
+
+SEED_SCRIPT="$SEED_PATH/pre-install.sh"
+if [ ! -z "$SEED_TYPE" ] && [ -f "$SEED_SCRIPT" ]; then
+  . "$SEED_SCRIPT" "$DOMAIN_NAME" "$SUBFOLDER"
+fi
+
 
 sudo site $DOMAIN_NAME -subfolder=/$SUBFOLDER -wp -force-redirect=root
 
@@ -109,7 +175,13 @@ if [ -f "wp-content/plugins/hello.php" ]; then
   rm "wp-content/plugins/hello.php"
 fi
 
-PROTOCOL=http # TODO: If parent site has SSL already, PROTOCOL=https
+# Check parent site protocol
+if [[ $(is-ssl $DOMAIN_NAME) == "true" ]]; then
+  PROTOCOL=https
+else
+  PROTOCOL=http
+fi
+
 
 SITE_URL=$PROTOCOL://$DOMAIN_NAME/$SUBFOLDER/
 
@@ -121,3 +193,10 @@ popd &>/dev/null
 echo
 echo "Site folder is ~/apps/$DOMAIN_NAME/$SUBFOLDER"
 echo "Site URL is $SITE_URL"
+
+# Post install
+
+SEED_SCRIPT="$SEED_PATH/post-install.sh"
+if [ ! -z "$SEED_TYPE" ] && [ -f "$SEED_SCRIPT" ]; then
+  . "$SEED_SCRIPT" "$DOMAIN_NAME" "$SUBFOLDER"
+fi

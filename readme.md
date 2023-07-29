@@ -38,20 +38,3 @@ Available commands:
   list-db                   List databases
   list-cert                 List certificates
 ```
-
-## Develop
-
-Update bundled Webinoly from library root.
-
-```sh
-wget -O - https://github.com/eliot-akira/webinoly/tarball/master | tar xz && mv eliot-akira-webinoly-* webinoly && rm -rf assets/webinoly && mv webinoly assets
-```
-
-### PHP 7.2
-
-Forked Webinoly preserves ability to install PHP 7.2
-
-```
-./lib/install:224:	[[ $ver =~ ^(7.2|7.3)$ ]] && sudo apt -y install php${ver}-recode
-./lib/general:10:readonly php_supported=(7.2 7.3 7.4 8.0)
-```

@@ -42,6 +42,7 @@ if [ ! -f ~/.bash_aliases ]; then
 
   mkdir -p ~/apps
   mkdir -p ~/bin
+  mkdir -p ~/logs
 
   cp $SCRIPTPATH/assets/.profile ~
   cp $SCRIPTPATH/assets/.bash_aliases ~
