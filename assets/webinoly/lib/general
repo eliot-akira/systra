@@ -551,9 +551,9 @@ wp_config_write() {
 	
 	# If variable is already defined, update it, if not exist then add a new var at the bottom.
 	if [[ -n $path && -n $(wp_config_read $1 $2 $4) ]]; then
-		sudo sed -i "/$(grep -iE "^define[ ]?\([ ]?[\"'\'']$2[\"'\''].*$" $path)/c \define('$2', $3);" $path
+		sudo sed -i "/$(grep -iE "^define[ ]?\([ ]?[\"'\'']$2[\"'\''].*$" $path)/c \define( '$2', $3 );" $path
 	elif [[ -n $path ]]; then
-		sudo sed -i "/ stop editing! /i \define('$2', $3);" $path
+		sudo sed -i "/ stop editing! /i \define( '$2', $3 );" $path
 	fi
 }
 
