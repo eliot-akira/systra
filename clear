@@ -1,0 +1,43 @@
+#!/bin/bash
+
+if [ -z $1 ]; then
+  echo -e "Clear file permissions\n\nUsage:\n"
+  echo "  clear [domain]  Clear file permissions for the site"
+  echo
+  echo "To see a list of sites, run: sys list"
+  echo
+  exit
+fi
+
+SCRIPTPATH=$(dirname $(readlink -f "$0"))
+. $SCRIPTPATH/common
+
+DOMAIN_NAME=$1
+SITE_FOLDER="/var/www/$DOMAIN_NAME/htdocs"
+
+if [ ! -d "$SITE_FOLDER" ]; then
+  echo "Site folder not found: $SITE_FOLDER"
+  exit
+fi
+
+# Same commands as in ./new
+
+# All new files and directories are owned by www-data group - and editable by $USER
+
+echo "Change ownership of folder to $USER:www-data and editable by $USER"
+echo
+sudo chown -R $USER:www-data $SITE_FOLDER
+sudo chmod -R g+rw $SITE_FOLDER
+sudo chmod 775 $SITE_FOLDER
+
+cd $SITE_FOLDER
+
+echo "Change directory permissions rwxr-xr-x"
+echo # Was 2755
+# echo "find . -type d -exec chmod 755 {} \;"
+find . -type d -exec chmod 755 {} \;
+
+echo "Change file permissions rw-r--r--"
+echo # Was 644
+# echo "find . -type f -exec chmod 664 {} \;"
+find . -type f -not -path "./node_modules/*" -not -path "./build/*" -exec chmod 664 {} \;

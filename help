@@ -1,5 +1,10 @@
 #!/bin/bash
 
+HAS_SEEDS=
+if [ -d "/home/$USER/lib/seeds" ]; then
+  HAS_SEEDS=true
+fi
+
 echo "Usage: sys [command]"
 echo
 echo "Available commands:"
@@ -7,21 +12,35 @@ echo
 echo "  install                   Install system"
 echo
 echo "  new [domain]              Create new site"
+if [ ! -z $HAS_SEEDS ]; then
+echo "  new [domain] from [seed]  Create new site from seed"
+fi
 echo "  new [domain] [folder]     Create new child site"
+if [ ! -z $HAS_SEEDS ]; then
+echo "  new [domain] [folder] from [seed]  Create new child site from seed"
+fi
 echo "  new-cert [domain]         Create new certificate"
 echo
 echo "  delete [domain]           Delete site"
 echo "  delete [domain] [folder]  Delete child site"
+echo
 echo "  delete-db [name]          Delete database by name"
 echo "  delete-cert [domain]      Delete certificate by domain name"
 echo
 echo "  info                      Info about system"
 echo "  info [domain]             Info about site"
 echo "  info [domain] [folder]    Info about child site"
+echo "  ip [domain]               IP address of domain"
 echo
 echo "  list                      List sites"
+echo "  list [domain]             List child sites"
 echo "  list-db                   List databases"
 echo "  list-cert                 List certificates"
+if [ ! -z $HAS_SEEDS ]; then
+echo "  list-seeds                List seeds"
+fi
 echo
-echo "  update-wp                 Update WordPress package for new sites"
+echo "  clear [domain]            Clear file permissions"
+# echo
+# echo "  update-wp                 Update WordPress package for new sites"
 echo

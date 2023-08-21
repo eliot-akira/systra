@@ -1,5 +1,35 @@
 #!/bin/bash
 
-sudo site -list
+main() {
 
-# List other site types: static and Node.js
+if [ -z "${1-}" ]; then
+
+  sudo site -list
+
+  # List other site types: static and Node.js
+
+  exit
+fi
+
+local DOMAIN=$1
+local SITES_FOLDER="/home/$USER/apps/$DOMAIN/sites"
+
+if [ ! -d "$SITES_FOLDER" ]; then
+  echo "Site $DOMAIN has no child sites"
+  echo
+  exit
+fi
+
+echo "Child sites under https://$DOMAIN/sites"
+echo
+
+for SITE in $(ls -1 $SITES_FOLDER); do
+  echo "$SITE"
+done
+
+echo
+
+}
+
+main "$@"
+

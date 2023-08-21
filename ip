@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -eou pipefail
+
+if [ -z "${1-}" ]; then
+  echo "Usage: ip [domain]"
+  exit
+fi
+
+curl -vI --silent $1 2>&1 | grep "Connected"

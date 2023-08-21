@@ -50,8 +50,8 @@ clearp() {
   else
     DIR=.
   fi
-  sudo chown www-data:www-data -R $DIR/*
-  sudo chgrp -R www-data $DIR
+  sudo chown $USER:www-data -R $DIR/*
+  # sudo chgrp -R www-data $DIR
   sudo chmod -R g+rw $DIR
   sudo find $DIR -type d -exec chmod 2775 {} \;
   sudo find $DIR -type f -exec chmod ug+rw {} \;
@@ -107,7 +107,7 @@ alias nginx-reload='sudo nginx -t 2>&1 >/dev/null | grep -v "fastcgi_params_hash
 # WordPress
 
 alias www='sudo -u www-data'
-alias wp='sudo -u www-data ~/bin/wp'
+# alias wp='sudo -u www-data ~/bin/wp'
 
 alias wpp='cd wp-content/plugins'
 alias wpt='cd wp-content/themes'

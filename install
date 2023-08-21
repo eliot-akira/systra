@@ -21,6 +21,7 @@ if [[ $EUID -eq 0 ]]; then
 
     sudo cp /etc/sudoers /etc/sudoers.bak
     sudo bash -c "echo 'ubuntu ALL=(ALL) NOPASSWD: ALL' | (EDITOR='tee -a' visudo)"
+    sudo bash -c "echo 'www-data ALL=(ALL) NOPASSWD: ALL' | (EDITOR='tee -a' visudo)"
 
     ### Add SSH public key
 

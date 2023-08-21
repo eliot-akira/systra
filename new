@@ -40,7 +40,13 @@ fi
 
 if [ -z "$SUBFOLDER" ]; then
 
-  echo "Creating site at domain $DOMAIN_NAME"
+  echo -n "Creating site at domain $DOMAIN_NAME"
+  if [ ! -z "$SEED_TYPE" ]; then
+    echo " from seed $SEED_TYPE"
+  else
+    echo
+  fi
+
   enter-when-ready
 
   # Install
@@ -81,6 +87,7 @@ if [ -z "$SUBFOLDER" ]; then
   # All new files and directories are owned by www-data group - and editable by $USER
   sudo chown -R $USER:www-data /var/www/$DOMAIN_NAME/htdocs
   sudo chmod -R g+rw /var/www/$DOMAIN_NAME/htdocs
+  sudo chmod 775 /var/www/$DOMAIN_NAME/htdocs
 
   pushd "/home/$USER/apps/$DOMAIN_NAME/" 1>/dev/null
 
@@ -133,7 +140,13 @@ if [ ! -L ~/apps/$DOMAIN_NAME ]; then
   exit
 fi
 
-echo "Creating child site at $DOMAIN_NAME/$SUBFOLDER"
+echo -n "Creating child site at $DOMAIN_NAME/$SUBFOLDER"
+if [ ! -z "$SEED_TYPE" ]; then
+  echo " from $SEED_TYPE seed"
+else
+  echo
+fi
+
 enter-when-ready
 
 # Install
@@ -162,8 +175,9 @@ fi
 sudo httpauth $DOMAIN_NAME -subfolder=/$SUBFOLDER -wp-admin=off &> /dev/null
 
 # All new files and directories are owned by www-data group - and editable by $USER
-# sudo chown -R $USER:www-data /var/www/$DOMAIN_NAME/htdocs/$SUBFOLDER
+sudo chown -R $USER:www-data /var/www/$DOMAIN_NAME/htdocs/$SUBFOLDER
 sudo chmod -R g+rw /var/www/$DOMAIN_NAME/htdocs/$SUBFOLDER
+sudo chmod 775 /var/www/$DOMAIN_NAME/htdocs/$SUBFOLDER
 
 pushd "/home/$USER/apps/$DOMAIN_NAME/$SUBFOLDER/" &>/dev/null
 
