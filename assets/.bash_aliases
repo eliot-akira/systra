@@ -41,6 +41,8 @@ alias fl='find . -type l -iname "$@"'
 # Recursive grep
 alias grr='function grr(){ grep -rHIn --exclude-dir=public --exclude-dir=*/_* --exclude-dir=*/@* --exclude-dir=node_modules --exclude-dir=.git --exclude=*.min.* --exclude=*.map --exclude=*.lock --exclude=package-lock.json "$@" . 2>&1 | grep -v "No such file" ;}; grr'
 
+alias h100='history -n 100'
+
 # Server management
 
 clearp() {

@@ -85,8 +85,8 @@ if [ -z "$SUBFOLDER" ]; then
   sudo mv /var/www/$DOMAIN_NAME/wp-config.php ~/apps/$DOMAIN_NAME
 
   # All new files and directories are owned by www-data group - and editable by $USER
-  sudo chown -R $USER:www-data /var/www/$DOMAIN_NAME/htdocs
-  sudo chmod -R g+rw /var/www/$DOMAIN_NAME/htdocs
+  sudo chown -R $USER:www-data /var/www/$DOMAIN_NAME
+  sudo chmod -R g+rw /var/www/$DOMAIN_NAME
   sudo chmod 775 /var/www/$DOMAIN_NAME/htdocs
 
   pushd "/home/$USER/apps/$DOMAIN_NAME/" 1>/dev/null
